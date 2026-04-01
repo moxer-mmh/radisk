@@ -163,13 +163,16 @@ fn render_radial_map(f: &mut Frame, app: &App, area: Rect) {
     }
 
     let map = app.radial_map.as_ref().unwrap();
+
+    // Calculate max radius from map
     let max_radius = map
         .rings
         .last()
         .map(|r| r.outer_radius)
         .unwrap_or(map.center_radius);
 
-    let bounds = max_radius * 1.1;
+    // Set bounds with some padding
+    let bounds = max_radius * 1.2;
 
     let canvas = Canvas::default()
         .block(
@@ -186,8 +189,17 @@ fn render_radial_map(f: &mut Frame, app: &App, area: Rect) {
         .x_bounds([-bounds, bounds])
         .y_bounds([-bounds, bounds])
         .paint(|ctx| {
-            // Draw segments from outermost to innermost
-            for ring in map.rings.iter().rev() {
+            // Draw center circle first (background)
+            let center_clr = center_color(&app.renderer.config);
+            ctx.draw(&crate::renderer::CenterShape {
+                radius: map.center_radius,
+                color: center_clr.to_ratatui(),
+                center_x: 0.0,
+                center_y: 0.0,
+            });
+
+            // Draw segments from innermost to outermost
+            for ring in &map.rings {
                 for segment in &ring.segments {
                     let colors = app.renderer.get_segment_colors(segment, ring.depth);
 
@@ -202,15 +214,6 @@ fn render_radial_map(f: &mut Frame, app: &App, area: Rect) {
                     });
                 }
             }
-
-            // Draw center circle
-            let center_clr = center_color(&app.renderer.config);
-            ctx.draw(&crate::renderer::CenterShape {
-                radius: map.center_radius,
-                color: center_clr.to_ratatui(),
-                center_x: 0.0,
-                center_y: 0.0,
-            });
         });
 
     f.render_widget(canvas, area);

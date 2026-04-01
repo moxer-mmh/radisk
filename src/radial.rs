@@ -97,25 +97,19 @@ pub fn build_radial_map(arena: &TreeArena, root_id: FolderId, config: &RadialCon
     let root_path = root.file.path.to_string_lossy().into_owned();
     let root_file_count = arena.total_file_count(root_id);
 
-    // Calculate total radius to fit in canvas
-    // We want the map to fill about 80% of the available space
-    // Canvas coordinate space is roughly -bound to +bound
-    // Each braille cell is 2x4 pixels, so effective pixels = cells * 2
-    let effective_width = config.terminal_width as f64 * 0.75 * 2.0; // 75% for map area, *2 for braille
-    let effective_height = config.terminal_height as f64 * 0.8 * 4.0; // 80% for map area, *4 for braille
-    let min_effective = effective_width.min(effective_height);
+    // Use a fixed coordinate space - we'll scale to canvas in the renderer
+    // The canvas will be sized to fit the map, so we just need reasonable proportions
+    // Total rings = depth + 1 (for center) + depth levels of data
+    let total_rings = config.ring_depth + 1;
 
-    // Total radius = center + (depth + 1) rings
-    // So ring_breadth = total_radius / (depth + 2)
-    let total_radius = min_effective / 2.2; // Leave some margin
-    let total_depth = config.ring_depth + 1; // +1 for center
-    let ring_breadth = total_radius / (total_depth as f64 + 1.0);
-    let ring_breadth = ring_breadth.clamp(3.0, 30.0); // Reasonable bounds
+    // Each ring has a fixed breadth in our coordinate space
+    // Center has half the breadth of data rings
+    let ring_breadth = 10.0; // Fixed coordinate unit per ring
 
-    // Calculate center radius
-    let center_radius = ring_breadth;
+    // Center radius is half a ring breadth (the center circle)
+    let center_radius = ring_breadth * 0.5;
 
-    // Calculate visibility limits per depth
+    // Calculate visibility limits per depth (minimum file size to show)
     let mut limits: Vec<u64> = Vec::with_capacity(config.ring_depth + 1);
     let pi2b = std::f64::consts::PI * 4.0 * ring_breadth;
     for depth in 0..=config.ring_depth {
@@ -518,17 +512,9 @@ mod tests {
         };
         let map = build_radial_map(&arena, root_id, &config);
 
-        // Ring breadth should be positive and reasonable
-        assert!(
-            map.ring_breadth >= 3.0,
-            "Ring breadth {} too small",
-            map.ring_breadth
-        );
-        assert!(
-            map.ring_breadth <= 30.0,
-            "Ring breadth {} too large",
-            map.ring_breadth
-        );
+        // Ring breadth should be positive
+        assert!(map.ring_breadth > 0.0, "Ring breadth should be positive");
+        assert!(map.center_radius > 0.0, "Center radius should be positive");
     }
 
     #[test]
