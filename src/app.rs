@@ -268,25 +268,24 @@ impl App {
             .unwrap_or(radial_map.center_radius);
 
         // Match the bounds calculation from render_radial_map
-        // Account for braille resolution (2x4 dots per cell) and aspect ratio
         let pixel_width = inner_width as f64 * 2.0;
         let pixel_height = inner_height as f64 * 4.0;
+        let aspect_ratio = pixel_height / pixel_width;
 
-        let radius = max_radius * 1.2;
-        let x_bounds_range = 2.0 * radius; // [-radius, radius]
-        let y_bounds_height = radius * (pixel_height / pixel_width);
-        let y_bounds_range = 2.0 * y_bounds_height; // [-y_bounds_height, y_bounds_height]
+        // Bounds match what's set in ui.rs
+        let x_bound = max_radius;
+        let y_bound = max_radius * aspect_ratio;
 
         // Convert from cell position to relative position (0 to 1)
         let rel_x = (col - inner_x) as f64 / inner_width as f64;
         let rel_y = (row - inner_y) as f64 / inner_height as f64;
 
         // Convert to canvas coordinates
-        // Canvas: x goes from -radius (left) to +radius (right)
-        // Canvas: y goes from -y_bounds_height (bottom) to +y_bounds_height (top)
+        // Canvas: x goes from -x_bound (left) to +x_bound (right)
+        // Canvas: y goes from -y_bound (bottom) to +y_bound (top)
         // Terminal: y=0 at top, increases downward
-        let canvas_x = -radius + rel_x * x_bounds_range;
-        let canvas_y = y_bounds_height - rel_y * y_bounds_range; // Y inverted
+        let canvas_x = -x_bound + rel_x * 2.0 * x_bound;
+        let canvas_y = y_bound - rel_y * 2.0 * y_bound; // Y inverted
 
         Some((canvas_x, canvas_y))
     }

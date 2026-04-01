@@ -164,14 +164,14 @@ fn render_radial_map(f: &mut Frame, app: &App, area: Rect) {
 
     let map = app.radial_map.as_ref().unwrap();
 
-    // Calculate max radius from map
+    // Calculate max radius from map (this is already scaled to fit)
     let max_radius = map
         .rings
         .last()
         .map(|r| r.outer_radius)
         .unwrap_or(map.center_radius);
 
-    // Account for aspect ratio - canvas area after borders
+    // Canvas area after borders
     let inner_width = (area.width.saturating_sub(2)) as f64;
     let inner_height = (area.height.saturating_sub(2)) as f64;
 
@@ -179,12 +179,15 @@ fn render_radial_map(f: &mut Frame, app: &App, area: Rect) {
     let pixel_width = inner_width * 2.0;
     let pixel_height = inner_height * 4.0;
 
-    // To make the map circular, we need bounds that account for the aspect ratio
-    // The radius should map to the same number of pixels in both directions
-    let radius = max_radius * 1.2;
-    let x_bounds = [-radius, radius];
-    let y_bounds_height = radius * (pixel_height / pixel_width);
-    let y_bounds = [-y_bounds_height, y_bounds_height];
+    // Calculate bounds that will fit the map exactly
+    // We need the map to fit within the canvas, so bounds should match max_radius
+    // But account for aspect ratio to keep it circular
+    let aspect_ratio = pixel_height / pixel_width;
+
+    // Set bounds - the map's max_radius should fill most of the canvas
+    // Use max_radius as the x bound, and scale y to maintain aspect ratio
+    let x_bound = max_radius;
+    let y_bound = max_radius * aspect_ratio;
 
     let canvas = Canvas::default()
         .block(
@@ -198,8 +201,8 @@ fn render_radial_map(f: &mut Frame, app: &App, area: Rect) {
                 }),
         )
         .marker(Marker::Braille)
-        .x_bounds(x_bounds)
-        .y_bounds(y_bounds)
+        .x_bounds([-x_bound, x_bound])
+        .y_bounds([-y_bound, y_bound])
         .paint(|ctx| {
             // Draw center circle first (background)
             let center_clr = center_color(&app.renderer.config);
