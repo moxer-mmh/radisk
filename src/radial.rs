@@ -118,9 +118,8 @@ pub fn build_radial_map(arena: &TreeArena, root_id: FolderId, config: &RadialCon
     // Total radius = center_radius + (depth + 1) * ring_breadth
     // For center: radius = ring_breadth * 0.5
     // Total = 0.5 * ring_breadth + (depth + 1) * ring_breadth = ring_breadth * (depth + 1.5)
-    // We want total * 2 < available_pixels (with some padding)
     let total_depth_factor = config.ring_depth as f64 + 1.5;
-    let max_ring_breadth = (available_pixels * 0.45) / total_depth_factor; // 45% of available, leaving 10% margin
+    let max_ring_breadth = (available_pixels * 0.3) / total_depth_factor; // 30% of available space
     let ring_breadth = max_ring_breadth.max(2.0); // Minimum 2 pixels
 
     // Center radius is half a ring breadth
