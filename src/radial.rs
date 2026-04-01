@@ -97,16 +97,33 @@ pub fn build_radial_map(arena: &TreeArena, root_id: FolderId, config: &RadialCon
     let root_path = root.file.path.to_string_lossy().into_owned();
     let root_file_count = arena.total_file_count(root_id);
 
-    // Use a fixed coordinate space - we'll scale to canvas in the renderer
-    // The canvas will be sized to fit the map, so we just need reasonable proportions
-    // Total rings = depth + 1 (for center) + depth levels of data
-    let total_rings = config.ring_depth + 1;
+    // Calculate available canvas space
+    // Layout: sidebar takes 25%, status bar takes 2 rows
+    // Canvas has borders (2 cells total)
+    let sidebar_width = (config.terminal_width as f64 * 0.25).ceil() as u16;
+    let canvas_inner_width = config
+        .terminal_width
+        .saturating_sub(sidebar_width)
+        .saturating_sub(2);
+    let canvas_inner_height = config.terminal_height.saturating_sub(2).saturating_sub(2); // status bar + borders
 
-    // Each ring has a fixed breadth in our coordinate space
-    // Center has half the breadth of data rings
-    let ring_breadth = 10.0; // Fixed coordinate unit per ring
+    // Braille resolution: 2 dots wide, 4 dots tall per cell
+    let pixel_width = canvas_inner_width as f64 * 2.0;
+    let pixel_height = canvas_inner_height as f64 * 4.0;
 
-    // Center radius is half a ring breadth (the center circle)
+    // Use the smaller dimension to ensure circle fits
+    let available_pixels = pixel_width.min(pixel_height);
+
+    // Calculate ring_breadth to fit within available space
+    // Total radius = center_radius + (depth + 1) * ring_breadth
+    // For center: radius = ring_breadth * 0.5
+    // Total = 0.5 * ring_breadth + (depth + 1) * ring_breadth = ring_breadth * (depth + 1.5)
+    // We want total * 2 < available_pixels (with some padding)
+    let total_depth_factor = config.ring_depth as f64 + 1.5;
+    let max_ring_breadth = (available_pixels * 0.45) / total_depth_factor; // 45% of available, leaving 10% margin
+    let ring_breadth = max_ring_breadth.max(2.0); // Minimum 2 pixels
+
+    // Center radius is half a ring breadth
     let center_radius = ring_breadth * 0.5;
 
     // Calculate visibility limits per depth (minimum file size to show)
