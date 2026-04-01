@@ -12,7 +12,9 @@ use crossterm::{
     cursor,
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyEventKind},
     execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    terminal::{
+        disable_raw_mode, enable_raw_mode, size, EnterAlternateScreen, LeaveAlternateScreen,
+    },
 };
 use ratatui::{backend::CrosstermBackend, Terminal};
 use std::{io, panic, path::PathBuf, time::Duration};
@@ -29,18 +31,27 @@ struct Cli {
     depth: usize,
 }
 
+/// Restore terminal to usable state
+fn restore_terminal() {
+    let _ = disable_raw_mode();
+    let _ = execute!(
+        io::stdout(),
+        LeaveAlternateScreen,
+        DisableMouseCapture,
+        cursor::Show
+    );
+    // Move cursor to bottom of screen
+    if let Ok((_, rows)) = size() {
+        let _ = execute!(io::stdout(), cursor::MoveTo(0, rows.saturating_sub(1)));
+    }
+}
+
 /// Guard to ensure terminal is restored on drop
 struct TerminalGuard;
 
 impl Drop for TerminalGuard {
     fn drop(&mut self) {
-        let _ = disable_raw_mode();
-        let _ = execute!(
-            io::stdout(),
-            LeaveAlternateScreen,
-            DisableMouseCapture,
-            cursor::Show
-        );
+        restore_terminal();
     }
 }
 
@@ -56,13 +67,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Setup panic hook to restore terminal
     let original_hook = panic::take_hook();
     panic::set_hook(Box::new(move |info| {
-        let _ = disable_raw_mode();
-        let _ = execute!(
-            io::stdout(),
-            LeaveAlternateScreen,
-            DisableMouseCapture,
-            cursor::Show
-        );
+        restore_terminal();
         original_hook(info);
     }));
 
@@ -88,19 +93,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut app = App::new(path.clone(), cli.depth);
     let result = run_app(&mut terminal, &mut app);
 
-    // Restore terminal
+    // Proper restore sequence
     terminal.clear()?;
-    disable_raw_mode()?;
-    execute!(
-        terminal.backend_mut(),
-        LeaveAlternateScreen,
-        DisableMouseCapture,
-        cursor::Show
-    )?;
-    terminal.show_cursor()?;
+    restore_terminal();
+    // Move cursor to bottom after leaving alternate screen
+    if let Ok((_, rows)) = size() {
+        let _ = execute!(io::stdout(), cursor::MoveTo(0, rows.saturating_sub(1)));
+    }
 
-    // Drop the guard (no-op since we already restored)
-    std::mem::forget(_guard); // Don't run drop since we already restored
+    // Prevent guard from running again
+    std::mem::forget(_guard);
 
     if let Err(err) = result {
         eprintln!("Error: {}", err);
