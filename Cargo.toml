@@ -1,0 +1,17 @@
+[package]
+name = "radisk"
+version = "0.1.0"
+edition = "2021"
+description = "Terminal-based radial disk usage visualizer inspired by KDE FileLight"
+
+[dependencies]
+ratatui = "0.30"
+crossterm = "0.29"
+walkdir = "2.5"
+palette = "0.7"
+clap = { version = "4", features = ["derive"] }
+
+[dev-dependencies]
+tempfile = "3"
+assert_fs = "1"
+approx = "0.5"
