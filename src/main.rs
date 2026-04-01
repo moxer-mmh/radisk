@@ -89,8 +89,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Clear screen
     terminal.clear()?;
 
+    // Get actual terminal size
+    let (term_width, term_height) = size().unwrap_or((80, 24));
+
     // Create app and run
-    let mut app = App::new(path.clone(), cli.depth);
+    let mut app = App::new(path.clone(), cli.depth, term_width, term_height);
     let result = run_app(&mut terminal, &mut app);
 
     // Proper restore sequence

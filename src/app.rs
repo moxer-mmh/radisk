@@ -54,7 +54,7 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(path: PathBuf, ring_depth: usize) -> Self {
+    pub fn new(path: PathBuf, ring_depth: usize, term_width: u16, term_height: u16) -> Self {
         Self {
             mode: AppMode::Scanning,
             focus: Focus::Map,
@@ -67,7 +67,7 @@ impl App {
             selected_uuid: None,
             sidebar_index: 0,
             sidebar_hover_index: None,
-            terminal_size: (80, 24),
+            terminal_size: (term_width, term_height),
             should_quit: false,
             scan_progress: None,
             scan_rx: None,
