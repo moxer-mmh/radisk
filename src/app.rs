@@ -206,6 +206,18 @@ impl App {
         }
     }
 
+    /// Calculate map area based on terminal size (after sidebar)
+    fn map_area(&self) -> ratatui::layout::Rect {
+        let total_width = self.terminal_size.0;
+        let sidebar_width = (total_width * 25) / 100;
+        ratatui::layout::Rect {
+            x: sidebar_width,
+            y: 0,
+            width: total_width - sidebar_width,
+            height: self.terminal_size.1,
+        }
+    }
+
     /// Calculate sidebar area based on terminal size
     fn sidebar_area(&self) -> ratatui::layout::Rect {
         let total_width = self.terminal_size.0;
@@ -216,6 +228,40 @@ impl App {
             width: sidebar_width,
             height: self.terminal_size.1,
         }
+    }
+
+    /// Convert terminal cell coordinates to canvas coordinates
+    /// Returns None if the point is not in the map area
+    fn terminal_to_canvas(&self, col: u16, row: u16) -> Option<(f64, f64)> {
+        let map = self.map_area();
+
+        // Check if within map area (accounting for borders)
+        if col < map.x + 1 || col >= map.x + map.width - 1 || row < 1 || row >= map.height - 1 {
+            return None;
+        }
+
+        // Get the radial map bounds
+        let radial_map = self.radial_map.as_ref()?;
+        let max_radius = radial_map
+            .rings
+            .last()
+            .map(|r| r.outer_radius)
+            .unwrap_or(radial_map.center_radius);
+        let bounds = max_radius * 1.2;
+
+        // Convert from cell position to relative position (0 to 1)
+        // Account for borders: inner area starts at x+1, y+1
+        let inner_width = (map.width - 2) as f64;
+        let inner_height = (map.height - 2) as f64;
+        let rel_x = (col - map.x - 1) as f64 / inner_width;
+        let rel_y = (row - 1) as f64 / inner_height;
+
+        // Convert to canvas coordinates (-bounds to +bounds)
+        // Canvas has origin at bottom-left, but terminal has origin at top-left
+        let canvas_x = -bounds + rel_x * 2.0 * bounds;
+        let canvas_y = bounds - rel_y * 2.0 * bounds; // Y inverted
+
+        Some((canvas_x, canvas_y))
     }
 
     /// Handle click at screen position
@@ -253,8 +299,10 @@ impl App {
             return;
         }
 
-        // Otherwise handle as map click
-        self.handle_click(col as f64, row as f64);
+        // Convert to canvas coordinates
+        if let Some((canvas_x, canvas_y)) = self.terminal_to_canvas(col, row) {
+            self.handle_canvas_click(canvas_x, canvas_y);
+        }
     }
 
     /// Handle hover at screen position
@@ -287,27 +335,44 @@ impl App {
         // Clear sidebar hover when in map
         self.sidebar_hover_index = None;
 
-        // Handle as map hover
-        self.handle_hover(col as f64, row as f64);
+        // Convert to canvas coordinates and handle hover
+        if let Some((canvas_x, canvas_y)) = self.terminal_to_canvas(col, row) {
+            self.handle_canvas_hover(canvas_x, canvas_y);
+        } else {
+            // Not in map area
+            self.hovered_uuid = None;
+            self.renderer.set_hovered(None);
+        }
     }
 
-    /// Handle mouse click
-    fn handle_click(&mut self, x: f64, y: f64) {
+    /// Handle mouse click in canvas coordinates
+    fn handle_canvas_click(&mut self, x: f64, y: f64) {
         if let Some(ref map) = self.radial_map {
-            if let Some(ref coords) = self.canvas_coords {
-                let (_angle, radius) = coords.pixel_to_polar(x, y);
+            // Calculate radius from center (0, 0) in canvas coords
+            let radius = (x * x + y * y).sqrt();
 
-                // Check if clicked on center (go up)
-                if radius < map.center_radius {
-                    self.navigate_up();
-                    return;
-                }
+            // Check if clicked on center (go up)
+            if radius < map.center_radius {
+                self.navigate_up();
+                return;
+            }
 
-                // Check if clicked on a segment
-                if let Some((uuid, _)) = self.renderer.hit_test(map, x, y, coords) {
-                    if let Some(segment) = self.renderer.find_segment(map, &uuid) {
-                        if segment.is_folder && !segment.is_fake {
-                            self.navigate_into(PathBuf::from(&segment.path));
+            // Calculate angle from canvas coordinates
+            let mut angle = y.atan2(x).to_degrees();
+            if angle < 0.0 {
+                angle += 360.0;
+            }
+
+            // Find segment at this position
+            for ring in &map.rings {
+                if radius >= ring.inner_radius && radius <= ring.outer_radius {
+                    let angle_16ths = ((angle * 16.0) as u32) % 5760;
+                    for segment in &ring.segments {
+                        if segment.contains_angle(angle_16ths) {
+                            if segment.is_folder && !segment.is_fake {
+                                self.navigate_into(PathBuf::from(&segment.path));
+                            }
+                            return;
                         }
                     }
                 }
@@ -315,19 +380,34 @@ impl App {
         }
     }
 
-    /// Handle mouse hover
-    fn handle_hover(&mut self, x: f64, y: f64) {
+    /// Handle mouse hover in canvas coordinates
+    fn handle_canvas_hover(&mut self, x: f64, y: f64) {
         if let Some(ref map) = self.radial_map {
-            if let Some(ref coords) = self.canvas_coords {
-                if let Some((uuid, _)) = self.renderer.hit_test(map, x, y, coords) {
-                    self.hovered_uuid = Some(uuid);
-                    self.renderer.set_hovered(Some(uuid));
-                } else {
-                    self.hovered_uuid = None;
-                    self.renderer.set_hovered(None);
+            // Calculate radius and angle from center
+            let radius = (x * x + y * y).sqrt();
+            let mut angle = y.atan2(x).to_degrees();
+            if angle < 0.0 {
+                angle += 360.0;
+            }
+
+            // Find segment at this position
+            for ring in &map.rings {
+                if radius >= ring.inner_radius && radius <= ring.outer_radius {
+                    let angle_16ths = ((angle * 16.0) as u32) % 5760;
+                    for segment in &ring.segments {
+                        if segment.contains_angle(angle_16ths) {
+                            self.hovered_uuid = Some(segment.uuid);
+                            self.renderer.set_hovered(Some(segment.uuid));
+                            return;
+                        }
+                    }
                 }
             }
         }
+
+        // No segment found
+        self.hovered_uuid = None;
+        self.renderer.set_hovered(None);
     }
 
     /// Navigate up to parent directory
