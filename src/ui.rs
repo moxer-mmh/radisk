@@ -171,8 +171,20 @@ fn render_radial_map(f: &mut Frame, app: &App, area: Rect) {
         .map(|r| r.outer_radius)
         .unwrap_or(map.center_radius);
 
-    // Set bounds with some padding
-    let bounds = max_radius * 1.2;
+    // Account for aspect ratio - canvas area after borders
+    let inner_width = (area.width.saturating_sub(2)) as f64;
+    let inner_height = (area.height.saturating_sub(2)) as f64;
+
+    // Braille resolution: 2 dots wide, 4 dots tall per cell
+    let pixel_width = inner_width * 2.0;
+    let pixel_height = inner_height * 4.0;
+
+    // To make the map circular, we need bounds that account for the aspect ratio
+    // The radius should map to the same number of pixels in both directions
+    let radius = max_radius * 1.2;
+    let x_bounds = [-radius, radius];
+    let y_bounds_height = radius * (pixel_height / pixel_width);
+    let y_bounds = [-y_bounds_height, y_bounds_height];
 
     let canvas = Canvas::default()
         .block(
@@ -186,8 +198,8 @@ fn render_radial_map(f: &mut Frame, app: &App, area: Rect) {
                 }),
         )
         .marker(Marker::Braille)
-        .x_bounds([-bounds, bounds])
-        .y_bounds([-bounds, bounds])
+        .x_bounds(x_bounds)
+        .y_bounds(y_bounds)
         .paint(|ctx| {
             // Draw center circle first (background)
             let center_clr = center_color(&app.renderer.config);
