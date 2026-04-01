@@ -1,1 +1,408 @@
-// App module - placeholder
+use crate::color::ColorConfig;
+use crate::radial::{build_radial_map, RadialConfig, RadialMap, Segment};
+use crate::renderer::{CanvasCoords, RadialRenderer};
+use crate::scanner::{self, ScanConfig, ScanProgress};
+use crate::tree::{format_size, FolderId, TreeArena};
+use crossterm::event::{KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKind};
+use std::path::PathBuf;
+use std::sync::mpsc;
+use std::thread;
+use uuid::Uuid;
+
+/// Application mode
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum AppMode {
+    Scanning,
+    Viewing,
+    Help,
+}
+
+/// Application focus
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Focus {
+    Map,
+    Sidebar,
+}
+
+/// Navigation history entry
+#[derive(Debug, Clone)]
+pub struct NavEntry {
+    pub path: PathBuf,
+    pub root_id: FolderId,
+}
+
+/// Application state
+pub struct App {
+    pub mode: AppMode,
+    pub focus: Focus,
+    pub arena: Option<TreeArena>,
+    pub current_path: PathBuf,
+    pub ring_depth: usize,
+    pub radial_map: Option<RadialMap>,
+    pub renderer: RadialRenderer,
+    pub hovered_uuid: Option<Uuid>,
+    pub selected_uuid: Option<Uuid>,
+    pub sidebar_index: usize,
+    pub terminal_size: (u16, u16),
+    pub should_quit: bool,
+    pub scan_progress: Option<ScanProgress>,
+    pub scan_rx: Option<mpsc::Receiver<ScanProgress>>,
+    pub nav_history: Vec<PathBuf>,
+    pub status_message: String,
+    pub canvas_coords: Option<CanvasCoords>,
+}
+
+impl App {
+    pub fn new(path: PathBuf, ring_depth: usize) -> Self {
+        Self {
+            mode: AppMode::Scanning,
+            focus: Focus::Map,
+            arena: None,
+            current_path: path,
+            ring_depth,
+            radial_map: None,
+            renderer: RadialRenderer::new(ColorConfig::default()),
+            hovered_uuid: None,
+            selected_uuid: None,
+            sidebar_index: 0,
+            terminal_size: (80, 24),
+            should_quit: false,
+            scan_progress: None,
+            scan_rx: None,
+            nav_history: Vec::new(),
+            status_message: String::new(),
+            canvas_coords: None,
+        }
+    }
+
+    /// Start scanning the current path
+    pub fn start_scan(&mut self) {
+        let path = self.current_path.clone();
+        let (tx, rx) = mpsc::channel();
+
+        self.mode = AppMode::Scanning;
+        self.scan_rx = Some(rx);
+        self.scan_progress = Some(ScanProgress {
+            files_scanned: 0,
+            total_size: 0,
+        });
+
+        // Spawn scan thread
+        thread::spawn(move || {
+            let config = ScanConfig::default();
+            match scanner::scan_with_progress(&path, &config, Some(tx.clone())) {
+                Ok(arena) => {
+                    // Send final progress
+                    let root_id = arena.root().unwrap();
+                    let _ = tx.send(ScanProgress {
+                        files_scanned: arena.total_file_count(root_id),
+                        total_size: arena.folder(root_id).file.size,
+                    });
+                    // Note: We can't send the arena through the channel easily
+                    // Instead, we'll do a synchronous scan after progress updates
+                }
+                Err(e) => {
+                    eprintln!("Scan error: {}", e);
+                }
+            }
+        });
+
+        // Also do a synchronous scan for the actual data
+        self.scan_sync();
+    }
+
+    /// Synchronous scan (for actual data)
+    fn scan_sync(&mut self) {
+        let config = ScanConfig::default();
+        match scanner::scan_directory(&self.current_path, &config) {
+            Ok(arena) => {
+                let root_id = arena.root().unwrap();
+                self.arena = Some(arena);
+                self.mode = AppMode::Viewing;
+                self.rebuild_map();
+                self.status_message = format!(
+                    "Scanned {} files ({})",
+                    self.arena.as_ref().unwrap().total_file_count(root_id),
+                    format_size(self.arena.as_ref().unwrap().folder(root_id).file.size)
+                );
+            }
+            Err(e) => {
+                self.status_message = format!("Error: {}", e);
+                self.mode = AppMode::Viewing;
+            }
+        }
+    }
+
+    /// Rebuild the radial map from current state
+    pub fn rebuild_map(&mut self) {
+        if let Some(ref arena) = self.arena {
+            if let Some(root_id) = arena.root() {
+                let config = RadialConfig {
+                    ring_depth: self.ring_depth,
+                    terminal_width: self.terminal_size.0,
+                    terminal_height: self.terminal_size.1,
+                    ..Default::default()
+                };
+                self.radial_map = Some(build_radial_map(arena, root_id, &config));
+                self.canvas_coords = Some(CanvasCoords::new(
+                    self.terminal_size.0 as usize,
+                    self.terminal_size.1 as usize,
+                ));
+            }
+        }
+    }
+
+    /// Handle terminal resize
+    pub fn resize(&mut self, width: u16, height: u16) {
+        self.terminal_size = (width, height);
+        self.rebuild_map();
+    }
+
+    /// Handle key event
+    pub fn handle_key(&mut self, key: KeyEvent) {
+        match self.mode {
+            AppMode::Scanning => {
+                if key.code == KeyCode::Esc || key.code == KeyCode::Char('q') {
+                    self.should_quit = true;
+                }
+            }
+            AppMode::Viewing => self.handle_viewing_key(key),
+            AppMode::Help => {
+                self.mode = AppMode::Viewing;
+            }
+        }
+    }
+
+    fn handle_viewing_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Char('q') | KeyCode::Esc => self.should_quit = true,
+            KeyCode::Char('?') => self.mode = AppMode::Help,
+            KeyCode::Char('u') | KeyCode::Backspace => self.navigate_up(),
+            KeyCode::Enter => self.navigate_into_hovered(),
+            KeyCode::Char('+') | KeyCode::Char('=') => self.zoom_in(),
+            KeyCode::Char('-') => self.zoom_out(),
+            KeyCode::Char('r') => self.start_scan(),
+            KeyCode::Tab => self.toggle_focus(),
+            KeyCode::Up | KeyCode::Char('k') => self.move_hover_up(),
+            KeyCode::Down | KeyCode::Char('j') => self.move_hover_down(),
+            _ => {}
+        }
+    }
+
+    /// Handle mouse event
+    pub fn handle_mouse(&mut self, mouse: MouseEvent) {
+        match mouse.kind {
+            MouseEventKind::Down(MouseButton::Left) => {
+                self.handle_click(mouse.column as f64, mouse.row as f64);
+            }
+            MouseEventKind::Moved => {
+                self.handle_hover(mouse.column as f64, mouse.row as f64);
+            }
+            MouseEventKind::ScrollUp => self.zoom_in(),
+            MouseEventKind::ScrollDown => self.zoom_out(),
+            _ => {}
+        }
+    }
+
+    /// Handle mouse click
+    fn handle_click(&mut self, x: f64, y: f64) {
+        if let Some(ref map) = self.radial_map {
+            if let Some(ref coords) = self.canvas_coords {
+                let (_angle, radius) = coords.pixel_to_polar(x, y);
+
+                // Check if clicked on center (go up)
+                if radius < map.center_radius {
+                    self.navigate_up();
+                    return;
+                }
+
+                // Check if clicked on a segment
+                if let Some((uuid, _)) = self.renderer.hit_test(map, x, y, coords) {
+                    if let Some(segment) = self.renderer.find_segment(map, &uuid) {
+                        if segment.is_folder && !segment.is_fake {
+                            self.navigate_into(PathBuf::from(&segment.path));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Handle mouse hover
+    fn handle_hover(&mut self, x: f64, y: f64) {
+        if let Some(ref map) = self.radial_map {
+            if let Some(ref coords) = self.canvas_coords {
+                if let Some((uuid, _)) = self.renderer.hit_test(map, x, y, coords) {
+                    self.hovered_uuid = Some(uuid);
+                    self.renderer.set_hovered(Some(uuid));
+                } else {
+                    self.hovered_uuid = None;
+                    self.renderer.set_hovered(None);
+                }
+            }
+        }
+    }
+
+    /// Navigate up to parent directory
+    pub fn navigate_up(&mut self) {
+        if let Some(parent) = self.current_path.parent() {
+            self.nav_history.push(self.current_path.clone());
+            self.current_path = parent.to_path_buf();
+            self.hovered_uuid = None;
+            self.renderer.set_hovered(None);
+            self.start_scan();
+        }
+    }
+
+    /// Navigate into a folder
+    pub fn navigate_into(&mut self, path: PathBuf) {
+        if path.is_dir() {
+            self.nav_history.push(self.current_path.clone());
+            self.current_path = path;
+            self.hovered_uuid = None;
+            self.renderer.set_hovered(None);
+            self.start_scan();
+        }
+    }
+
+    /// Navigate into the currently hovered folder
+    fn navigate_into_hovered(&mut self) {
+        if let Some(uuid) = self.hovered_uuid {
+            if let Some(ref map) = self.radial_map {
+                if let Some(segment) = self.renderer.find_segment(map, &uuid) {
+                    if segment.is_folder && !segment.is_fake {
+                        self.navigate_into(PathBuf::from(&segment.path));
+                    }
+                }
+            }
+        }
+    }
+
+    /// Zoom in (reduce ring depth)
+    pub fn zoom_in(&mut self) {
+        if self.ring_depth > 1 {
+            self.ring_depth -= 1;
+            self.rebuild_map();
+            self.status_message = format!("Zoom: {} rings", self.ring_depth);
+        }
+    }
+
+    /// Zoom out (increase ring depth)
+    pub fn zoom_out(&mut self) {
+        if self.ring_depth < 10 {
+            self.ring_depth += 1;
+            self.rebuild_map();
+            self.status_message = format!("Zoom: {} rings", self.ring_depth);
+        }
+    }
+
+    /// Toggle focus between map and sidebar
+    fn toggle_focus(&mut self) {
+        self.focus = match self.focus {
+            Focus::Map => Focus::Sidebar,
+            Focus::Sidebar => Focus::Map,
+        };
+    }
+
+    /// Move hover up in sidebar
+    fn move_hover_up(&mut self) {
+        if self.sidebar_index > 0 {
+            self.sidebar_index -= 1;
+        }
+    }
+
+    /// Move hover down in sidebar
+    fn move_hover_down(&mut self) {
+        if let Some(ref arena) = self.arena {
+            if let Some(root_id) = arena.root() {
+                let items = arena.folder_items(root_id);
+                if self.sidebar_index < items.len().saturating_sub(1) {
+                    self.sidebar_index += 1;
+                }
+            }
+        }
+    }
+
+    /// Get the currently hovered segment
+    pub fn hovered_segment(&self) -> Option<&Segment> {
+        if let Some(uuid) = self.hovered_uuid {
+            if let Some(ref map) = self.radial_map {
+                return self.renderer.find_segment(map, &uuid);
+            }
+        }
+        None
+    }
+
+    /// Get segments for sidebar display
+    pub fn sidebar_items(&self) -> Vec<crate::tree::TreeItem> {
+        if let Some(ref arena) = self.arena {
+            if let Some(root_id) = arena.root() {
+                return arena.folder_items(root_id);
+            }
+        }
+        Vec::new()
+    }
+
+    /// Update scan progress
+    pub fn update_scan_progress(&mut self) {
+        if let Some(ref rx) = self.scan_rx {
+            while let Ok(progress) = rx.try_recv() {
+                self.scan_progress = Some(progress);
+            }
+        }
+    }
+
+    /// Get status message
+    pub fn status_text(&self) -> String {
+        match self.mode {
+            AppMode::Scanning => {
+                if let Some(ref progress) = self.scan_progress {
+                    format!(
+                        "Scanning... {} files ({})",
+                        progress.files_scanned,
+                        format_size(progress.total_size)
+                    )
+                } else {
+                    "Scanning...".to_string()
+                }
+            }
+            AppMode::Viewing => {
+                if !self.status_message.is_empty() {
+                    self.status_message.clone()
+                } else if let Some(ref arena) = self.arena {
+                    if let Some(root_id) = arena.root() {
+                        format!(
+                            "{} files ({})",
+                            arena.total_file_count(root_id),
+                            format_size(arena.folder(root_id).file.size)
+                        )
+                    } else {
+                        String::new()
+                    }
+                } else {
+                    String::new()
+                }
+            }
+            AppMode::Help => "Press any key to close help".to_string(),
+        }
+    }
+
+    /// Get tooltip text for hovered segment
+    pub fn tooltip_text(&self) -> Option<String> {
+        if let Some(segment) = self.hovered_segment() {
+            let mut lines = vec![segment.name.clone(), format_size(segment.size)];
+
+            if segment.is_folder {
+                lines.push(format!("{} files", segment.file_count));
+            }
+
+            if segment.is_fake {
+                lines.push(format!("{} small files", segment.file_count));
+            }
+
+            Some(lines.join("\n"))
+        } else {
+            None
+        }
+    }
+}

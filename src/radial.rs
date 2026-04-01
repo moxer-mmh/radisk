@@ -213,7 +213,7 @@ fn build_segments_for_folder(
         return Vec::new();
     }
 
-    let folder = arena.folder(folder_id);
+    let _folder = arena.folder(folder_id);
     let items = arena.folder_items(folder_id);
 
     let mut segments = Vec::new();

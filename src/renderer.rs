@@ -1,5 +1,5 @@
-use crate::color::{center_color, colorize_segment, hover_color, ColorConfig, Rgb, SegmentColors};
-use crate::radial::{RadialMap, RingLevel, Segment, DEGREE_FACTOR, MAX_DEGREE};
+use crate::color::{colorize_segment, hover_color, ColorConfig, SegmentColors};
+use crate::radial::{RadialMap, Segment, DEGREE_FACTOR, MAX_DEGREE};
 use ratatui::style::Color;
 use ratatui::widgets::canvas::{Painter, Shape};
 use uuid::Uuid;
