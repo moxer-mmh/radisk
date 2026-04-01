@@ -2,7 +2,7 @@ use crate::color::ColorConfig;
 use crate::radial::{build_radial_map, RadialConfig, RadialMap, Segment};
 use crate::renderer::{CanvasCoords, RadialRenderer};
 use crate::scanner::{self, ScanConfig, ScanProgress};
-use crate::tree::{format_size, FolderId, TreeArena};
+use crate::tree::{format_size, FolderId, TreeArena, TreeItem};
 use crossterm::event::{KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKind};
 use std::path::PathBuf;
 use std::sync::mpsc;
@@ -43,6 +43,7 @@ pub struct App {
     pub hovered_uuid: Option<Uuid>,
     pub selected_uuid: Option<Uuid>,
     pub sidebar_index: usize,
+    pub sidebar_hover_index: Option<usize>,
     pub terminal_size: (u16, u16),
     pub should_quit: bool,
     pub scan_progress: Option<ScanProgress>,
@@ -65,6 +66,7 @@ impl App {
             hovered_uuid: None,
             selected_uuid: None,
             sidebar_index: 0,
+            sidebar_hover_index: None,
             terminal_size: (80, 24),
             should_quit: false,
             scan_progress: None,
@@ -193,15 +195,100 @@ impl App {
     pub fn handle_mouse(&mut self, mouse: MouseEvent) {
         match mouse.kind {
             MouseEventKind::Down(MouseButton::Left) => {
-                self.handle_click(mouse.column as f64, mouse.row as f64);
+                self.handle_click_at(mouse.column, mouse.row);
             }
             MouseEventKind::Moved => {
-                self.handle_hover(mouse.column as f64, mouse.row as f64);
+                self.handle_hover_at(mouse.column, mouse.row);
             }
             MouseEventKind::ScrollUp => self.zoom_in(),
             MouseEventKind::ScrollDown => self.zoom_out(),
             _ => {}
         }
+    }
+
+    /// Calculate sidebar area based on terminal size
+    fn sidebar_area(&self) -> ratatui::layout::Rect {
+        let total_width = self.terminal_size.0;
+        let sidebar_width = (total_width * 25) / 100;
+        ratatui::layout::Rect {
+            x: 0,
+            y: 0,
+            width: sidebar_width,
+            height: self.terminal_size.1,
+        }
+    }
+
+    /// Handle click at screen position
+    fn handle_click_at(&mut self, col: u16, row: u16) {
+        let sidebar = self.sidebar_area();
+
+        // Check if click is within sidebar
+        if col >= sidebar.x
+            && col < sidebar.x + sidebar.width
+            && row >= sidebar.y
+            && row < sidebar.y + sidebar.height
+        {
+            // Calculate item index (subtract 1 for border, 1 for title)
+            if row >= 2 {
+                let clicked_index = (row - 2) as usize;
+                let items = self.sidebar_items();
+                if clicked_index < items.len() {
+                    self.sidebar_index = clicked_index;
+                    self.focus = Focus::Sidebar;
+
+                    // If it's a folder, navigate into it
+                    let item = items[clicked_index];
+                    if item.is_folder() {
+                        if let Some(ref arena) = self.arena {
+                            if let TreeItem::Folder(id, _) = item {
+                                let path = arena.folder(id).file.path.clone();
+                                self.navigate_into(path);
+                            }
+                        }
+                    }
+                    return;
+                }
+            }
+            self.focus = Focus::Sidebar;
+            return;
+        }
+
+        // Otherwise handle as map click
+        self.handle_click(col as f64, row as f64);
+    }
+
+    /// Handle hover at screen position
+    fn handle_hover_at(&mut self, col: u16, row: u16) {
+        let sidebar = self.sidebar_area();
+
+        // Check if hover is within sidebar
+        if col >= sidebar.x
+            && col < sidebar.x + sidebar.width
+            && row >= sidebar.y
+            && row < sidebar.y + sidebar.height
+        {
+            if row >= 2 {
+                let hover_index = (row - 2) as usize;
+                let items = self.sidebar_items();
+                if hover_index < items.len() {
+                    self.sidebar_hover_index = Some(hover_index);
+                } else {
+                    self.sidebar_hover_index = None;
+                }
+            } else {
+                self.sidebar_hover_index = None;
+            }
+            // Clear map hover when in sidebar
+            self.hovered_uuid = None;
+            self.renderer.set_hovered(None);
+            return;
+        }
+
+        // Clear sidebar hover when in map
+        self.sidebar_hover_index = None;
+
+        // Handle as map hover
+        self.handle_hover(col as f64, row as f64);
     }
 
     /// Handle mouse click

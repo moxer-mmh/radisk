@@ -89,28 +89,41 @@ fn render_sidebar(f: &mut Frame, app: &App, area: Rect) {
         .iter()
         .enumerate()
         .map(|(i, item)| {
-            let (icon, display, style) = match item {
-                TreeItem::File(_, s) => {
-                    let style = if i == app.sidebar_index && app.focus == Focus::Sidebar {
-                        Style::default().fg(Color::White).bg(Color::DarkGray)
-                    } else {
-                        Style::default().fg(Color::White)
-                    };
-                    (" ", format!(" {}", format_size(*s)), style)
+            let (icon, name, size_str, style) = match item {
+                TreeItem::File(id, s) => {
+                    let name = app
+                        .arena
+                        .as_ref()
+                        .map(|a| a.file(*id).name.clone())
+                        .unwrap_or_else(|| "?".to_string());
+                    let mut style = Style::default().fg(Color::White);
+                    if i == app.sidebar_index && app.focus == Focus::Sidebar {
+                        style = style.bg(Color::DarkGray);
+                    }
+                    if app.sidebar_hover_index == Some(i) {
+                        style = style.add_modifier(Modifier::UNDERLINED);
+                    }
+                    (" ", name, format_size(*s), style)
                 }
-                TreeItem::Folder(_, s) => {
-                    let style = if i == app.sidebar_index && app.focus == Focus::Sidebar {
-                        Style::default()
-                            .fg(Color::Cyan)
-                            .add_modifier(Modifier::BOLD)
-                            .bg(Color::DarkGray)
-                    } else {
-                        Style::default().fg(Color::Cyan)
-                    };
-                    ("[D]", format!(" {}", format_size(*s)), style)
+                TreeItem::Folder(id, s) => {
+                    let name = app
+                        .arena
+                        .as_ref()
+                        .map(|a| a.folder(*id).file.name.clone())
+                        .unwrap_or_else(|| "?".to_string());
+                    let mut style = Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD);
+                    if i == app.sidebar_index && app.focus == Focus::Sidebar {
+                        style = style.bg(Color::DarkGray);
+                    }
+                    if app.sidebar_hover_index == Some(i) {
+                        style = style.add_modifier(Modifier::UNDERLINED);
+                    }
+                    ("[D]", name, format_size(*s), style)
                 }
             };
-            let content = format!("{}{}", icon, display);
+            let content = format!("{} {} ({})", icon, name, size_str);
             ListItem::new(content).style(style)
         })
         .collect();
