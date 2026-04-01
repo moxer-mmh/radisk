@@ -15,7 +15,7 @@ use crossterm::{
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use ratatui::{backend::CrosstermBackend, Terminal};
-use std::{io, path::PathBuf, time::Duration};
+use std::{io, panic, path::PathBuf, time::Duration};
 
 #[derive(Parser)]
 #[command(name = "radisk", about = "Terminal-based radial disk usage visualizer")]
@@ -29,6 +29,21 @@ struct Cli {
     depth: usize,
 }
 
+/// Guard to ensure terminal is restored on drop
+struct TerminalGuard;
+
+impl Drop for TerminalGuard {
+    fn drop(&mut self) {
+        let _ = disable_raw_mode();
+        let _ = execute!(
+            io::stdout(),
+            LeaveAlternateScreen,
+            DisableMouseCapture,
+            cursor::Show
+        );
+    }
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
 
@@ -37,6 +52,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         eprintln!("Error: {} is not a directory", path.display());
         std::process::exit(1);
     }
+
+    // Setup panic hook to restore terminal
+    let original_hook = panic::take_hook();
+    panic::set_hook(Box::new(move |info| {
+        let _ = disable_raw_mode();
+        let _ = execute!(
+            io::stdout(),
+            LeaveAlternateScreen,
+            DisableMouseCapture,
+            cursor::Show
+        );
+        original_hook(info);
+    }));
 
     // Setup terminal
     enable_raw_mode()?;
@@ -50,11 +78,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
+    // Create guard to ensure cleanup
+    let _guard = TerminalGuard;
+
+    // Clear screen
+    terminal.clear()?;
+
     // Create app and run
     let mut app = App::new(path.clone(), cli.depth);
     let result = run_app(&mut terminal, &mut app);
 
     // Restore terminal
+    terminal.clear()?;
     disable_raw_mode()?;
     execute!(
         terminal.backend_mut(),
@@ -63,6 +98,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         cursor::Show
     )?;
     terminal.show_cursor()?;
+
+    // Drop the guard (no-op since we already restored)
+    std::mem::forget(_guard); // Don't run drop since we already restored
 
     if let Err(err) = result {
         eprintln!("Error: {}", err);
