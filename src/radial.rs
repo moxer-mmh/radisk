@@ -4,8 +4,6 @@ use uuid::Uuid;
 /// Constants matching FileLight's radialMap.h
 pub const MAX_DEGREE: u32 = 5760; // 360 * 16 (16ths of degrees)
 pub const DEGREE_FACTOR: u32 = 16;
-pub const MIN_RING_BREADTH: f64 = 20.0;
-pub const MAX_RING_BREADTH: f64 = 60.0;
 pub const DEFAULT_RING_DEPTH: usize = 4;
 pub const MIN_RING_DEPTH: usize = 0;
 
@@ -99,11 +97,20 @@ pub fn build_radial_map(arena: &TreeArena, root_id: FolderId, config: &RadialCon
     let root_path = root.file.path.to_string_lossy().into_owned();
     let root_file_count = arena.total_file_count(root_id);
 
-    // Calculate ring breadth based on terminal size
-    let min_dimension = config.terminal_width.min(config.terminal_height) as f64;
-    let margin = 2.0; // minimal margin in cells
-    let ring_breadth = (min_dimension - margin) / (2.0 * config.ring_depth as f64 + 4.0);
-    let ring_breadth = ring_breadth.clamp(MIN_RING_BREADTH, MAX_RING_BREADTH);
+    // Calculate total radius to fit in canvas
+    // We want the map to fill about 80% of the available space
+    // Canvas coordinate space is roughly -bound to +bound
+    // Each braille cell is 2x4 pixels, so effective pixels = cells * 2
+    let effective_width = config.terminal_width as f64 * 0.75 * 2.0; // 75% for map area, *2 for braille
+    let effective_height = config.terminal_height as f64 * 0.8 * 4.0; // 80% for map area, *4 for braille
+    let min_effective = effective_width.min(effective_height);
+
+    // Total radius = center + (depth + 1) rings
+    // So ring_breadth = total_radius / (depth + 2)
+    let total_radius = min_effective / 2.2; // Leave some margin
+    let total_depth = config.ring_depth + 1; // +1 for center
+    let ring_breadth = total_radius / (total_depth as f64 + 1.0);
+    let ring_breadth = ring_breadth.clamp(3.0, 30.0); // Reasonable bounds
 
     // Calculate center radius
     let center_radius = ring_breadth;
@@ -112,7 +119,11 @@ pub fn build_radial_map(arena: &TreeArena, root_id: FolderId, config: &RadialCon
     let mut limits: Vec<u64> = Vec::with_capacity(config.ring_depth + 1);
     let pi2b = std::f64::consts::PI * 4.0 * ring_breadth;
     for depth in 0..=config.ring_depth {
-        let limit = (root_size as f64 / (pi2b * (depth as f64 + 1.0))) as u64;
+        let limit = if pi2b * (depth as f64 + 1.0) > 0.0 {
+            (root_size as f64 / (pi2b * (depth as f64 + 1.0))) as u64
+        } else {
+            1
+        };
         limits.push(limit.max(1));
     }
 
@@ -507,8 +518,17 @@ mod tests {
         };
         let map = build_radial_map(&arena, root_id, &config);
 
-        assert!(map.ring_breadth >= MIN_RING_BREADTH);
-        assert!(map.ring_breadth <= MAX_RING_BREADTH);
+        // Ring breadth should be positive and reasonable
+        assert!(
+            map.ring_breadth >= 3.0,
+            "Ring breadth {} too small",
+            map.ring_breadth
+        );
+        assert!(
+            map.ring_breadth <= 30.0,
+            "Ring breadth {} too large",
+            map.ring_breadth
+        );
     }
 
     #[test]
