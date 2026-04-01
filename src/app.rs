@@ -206,15 +206,23 @@ impl App {
         }
     }
 
-    /// Calculate map area based on terminal size (after sidebar)
-    fn map_area(&self) -> ratatui::layout::Rect {
+    /// Calculate canvas area based on terminal size
+    /// This matches the actual canvas widget area including its borders
+    fn canvas_area(&self) -> ratatui::layout::Rect {
         let total_width = self.terminal_size.0;
+        let total_height = self.terminal_size.1;
         let sidebar_width = (total_width * 25) / 100;
+
+        // Map area is after sidebar
+        let map_width = total_width - sidebar_width;
+        // Canvas height is total height minus status bar (2 rows)
+        let canvas_height = total_height - 2;
+
         ratatui::layout::Rect {
             x: sidebar_width,
             y: 0,
-            width: total_width - sidebar_width,
-            height: self.terminal_size.1,
+            width: map_width,
+            height: canvas_height,
         }
     }
 
@@ -231,12 +239,23 @@ impl App {
     }
 
     /// Convert terminal cell coordinates to canvas coordinates
-    /// Returns None if the point is not in the map area
+    /// Returns None if the point is not in the canvas area
     fn terminal_to_canvas(&self, col: u16, row: u16) -> Option<(f64, f64)> {
-        let map = self.map_area();
+        let canvas = self.canvas_area();
 
-        // Check if within map area (accounting for borders)
-        if col < map.x + 1 || col >= map.x + map.width - 1 || row < 1 || row >= map.height - 1 {
+        // The canvas widget has borders (Block::default().borders(Borders::ALL))
+        // So the inner drawing area starts at x+1, y+1 and ends at x+w-1, y+h-1
+        let inner_x = canvas.x + 1;
+        let inner_y = canvas.y + 1;
+        let inner_width = canvas.width.saturating_sub(2);
+        let inner_height = canvas.height.saturating_sub(2);
+
+        // Check if within the inner canvas area
+        if col < inner_x
+            || col >= inner_x + inner_width
+            || row < inner_y
+            || row >= inner_y + inner_height
+        {
             return None;
         }
 
@@ -250,16 +269,15 @@ impl App {
         let bounds = max_radius * 1.2;
 
         // Convert from cell position to relative position (0 to 1)
-        // Account for borders: inner area starts at x+1, y+1
-        let inner_width = (map.width - 2) as f64;
-        let inner_height = (map.height - 2) as f64;
-        let rel_x = (col - map.x - 1) as f64 / inner_width;
-        let rel_y = (row - 1) as f64 / inner_height;
+        let rel_x = (col - inner_x) as f64 / inner_width as f64;
+        let rel_y = (row - inner_y) as f64 / inner_height as f64;
 
         // Convert to canvas coordinates (-bounds to +bounds)
-        // Canvas has origin at bottom-left, but terminal has origin at top-left
+        // Canvas: x goes from -bounds (left) to +bounds (right)
+        // Canvas: y goes from -bounds (bottom) to +bounds (top)
+        // Terminal: y=0 at top, increases downward
         let canvas_x = -bounds + rel_x * 2.0 * bounds;
-        let canvas_y = bounds - rel_y * 2.0 * bounds; // Y inverted
+        let canvas_y = bounds - rel_y * 2.0 * bounds; // Y inverted: top=+bounds, bottom=-bounds
 
         Some((canvas_x, canvas_y))
     }
