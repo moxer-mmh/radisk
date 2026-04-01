@@ -1,8 +1,7 @@
-use crate::tree::{File, FileId, Folder, FolderId, TreeArena};
+use crate::tree::{File, Folder, FolderId, TreeArena};
 use std::collections::HashSet;
 use std::io;
 use std::path::{Path, PathBuf};
-use walkdir::WalkDir;
 
 /// Configuration for the disk scanner
 #[derive(Debug, Clone)]
