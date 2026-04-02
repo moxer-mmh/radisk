@@ -1,5 +1,6 @@
 mod app;
 mod color;
+mod context_menu;
 mod radial;
 mod renderer;
 mod scanner;

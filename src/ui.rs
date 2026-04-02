@@ -76,9 +76,16 @@ fn render_viewing(f: &mut Frame, app: &App) {
     // Status bar
     render_status_bar(f, app, map_chunks[1]);
 
-    // Tooltip if hovered
-    if let Some(tooltip) = app.tooltip_text() {
-        render_tooltip(f, &tooltip);
+    // Tooltip if hovered (only when context menu is not visible)
+    if !app.context_menu.visible {
+        if let Some(tooltip) = app.tooltip_text() {
+            render_tooltip(f, &tooltip);
+        }
+    }
+
+    // Context menu (rendered last so it's on top)
+    if app.context_menu.visible {
+        render_context_menu(f, app);
     }
 }
 
@@ -361,6 +368,55 @@ fn render_help(f: &mut Frame, app: &App) {
         .style(Style::default().bg(Color::Black));
 
     f.render_widget(help, help_area);
+}
+
+/// Render context menu popup
+fn render_context_menu(f: &mut Frame, app: &App) {
+    let menu = &app.context_menu;
+    let items = menu.menu_items();
+    let area = f.area();
+
+    // Calculate menu dimensions
+    let menu_width: u16 = 25;
+    let menu_height: u16 = items.len() as u16 + 2; // +2 for borders
+
+    // Position menu at cursor, but keep within screen bounds
+    let menu_x = menu.x.min(area.width.saturating_sub(menu_width));
+    let menu_y = menu.y.min(area.height.saturating_sub(menu_height));
+
+    let menu_area = Rect {
+        x: menu_x,
+        y: menu_y,
+        width: menu_width,
+        height: menu_height,
+    };
+
+    // Build menu items
+    let menu_items: Vec<ListItem> = items
+        .iter()
+        .enumerate()
+        .map(|(i, action)| {
+            let style = if i == menu.selected_index {
+                Style::default().fg(Color::Black).bg(Color::White)
+            } else {
+                Style::default().fg(Color::White)
+            };
+            let prefix = if i == menu.selected_index { "> " } else { "  " };
+            let content = format!("{}{}", prefix, action.label());
+            ListItem::new(content).style(style)
+        })
+        .collect();
+
+    let menu_widget = List::new(menu_items)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(format!(" {} ", menu.segment_name))
+                .border_style(Style::default().fg(Color::Yellow)),
+        )
+        .style(Style::default().bg(Color::DarkGray));
+
+    f.render_widget(menu_widget, menu_area);
 }
 
 /// Create a centered rectangle

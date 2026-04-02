@@ -1,4 +1,5 @@
 use crate::color::ColorConfig;
+use crate::context_menu::{ContextMenu, MenuAction};
 use crate::radial::{build_radial_map, RadialConfig, RadialMap, Segment};
 use crate::renderer::{CanvasCoords, RadialRenderer};
 use crate::scanner::{self, ScanConfig, ScanProgress};
@@ -51,6 +52,7 @@ pub struct App {
     pub nav_history: Vec<PathBuf>,
     pub status_message: String,
     pub canvas_coords: Option<CanvasCoords>,
+    pub context_menu: ContextMenu,
 }
 
 impl App {
@@ -74,6 +76,7 @@ impl App {
             nav_history: Vec::new(),
             status_message: String::new(),
             canvas_coords: None,
+            context_menu: ContextMenu::new(),
         }
     }
 
@@ -168,10 +171,28 @@ impl App {
                     self.should_quit = true;
                 }
             }
-            AppMode::Viewing => self.handle_viewing_key(key),
+            AppMode::Viewing => {
+                // If context menu is visible, handle menu navigation
+                if self.context_menu.visible {
+                    self.handle_context_menu_key(key);
+                } else {
+                    self.handle_viewing_key(key);
+                }
+            }
             AppMode::Help => {
                 self.mode = AppMode::Viewing;
             }
+        }
+    }
+
+    /// Handle key event when context menu is visible
+    fn handle_context_menu_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Esc => self.context_menu.hide(),
+            KeyCode::Up | KeyCode::Char('k') => self.context_menu.move_up(),
+            KeyCode::Down | KeyCode::Char('j') => self.context_menu.move_down(),
+            KeyCode::Enter => self.execute_menu_action(),
+            _ => {}
         }
     }
 
@@ -195,14 +216,21 @@ impl App {
     pub fn handle_mouse(&mut self, mouse: MouseEvent) {
         match mouse.kind {
             MouseEventKind::Down(MouseButton::Left) => {
-                self.handle_click_at(mouse.column, mouse.row);
+                if self.context_menu.visible {
+                    // Check if clicking on menu item
+                    self.handle_context_menu_click(mouse.column, mouse.row);
+                } else {
+                    self.handle_click_at(mouse.column, mouse.row);
+                }
             }
             MouseEventKind::Down(MouseButton::Right) => {
-                // Right-click navigates up
-                self.navigate_up();
+                // Show context menu if hovering over a segment
+                self.show_context_menu(mouse.column, mouse.row);
             }
             MouseEventKind::Moved => {
-                self.handle_hover_at(mouse.column, mouse.row);
+                if !self.context_menu.visible {
+                    self.handle_hover_at(mouse.column, mouse.row);
+                }
             }
             MouseEventKind::ScrollUp => self.zoom_in(),
             MouseEventKind::ScrollDown => self.zoom_out(),
@@ -438,6 +466,143 @@ impl App {
         // No segment found
         self.hovered_uuid = None;
         self.renderer.set_hovered(None);
+    }
+
+    /// Show context menu at cursor position if hovering over a segment
+    fn show_context_menu(&mut self, col: u16, row: u16) {
+        // Get the segment under cursor
+        if let Some(uuid) = self.hovered_uuid {
+            if let Some(ref map) = self.radial_map {
+                // Find the segment
+                for ring in &map.rings {
+                    for segment in &ring.segments {
+                        if segment.uuid == uuid {
+                            self.context_menu.show(
+                                col,
+                                row,
+                                segment.uuid,
+                                segment.name.clone(),
+                                segment.path.clone(),
+                                segment.is_folder,
+                            );
+                            return;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Handle click on context menu
+    fn handle_context_menu_click(&mut self, col: u16, row: u16) {
+        // Calculate which menu item was clicked
+        let menu = &self.context_menu;
+        let items = menu.menu_items();
+        let menu_x = menu.x;
+        let menu_y = menu.y;
+        let menu_width: u16 = 25;
+
+        if col >= menu_x
+            && col < menu_x + menu_width
+            && row > menu_y
+            && row <= menu_y + items.len() as u16
+        {
+            let clicked_index = (row - menu_y - 1) as usize;
+            if clicked_index < items.len() {
+                self.context_menu.selected_index = clicked_index;
+                self.execute_menu_action();
+            }
+        } else {
+            // Click outside menu - close it
+            self.context_menu.hide();
+        }
+    }
+
+    /// Execute the currently selected menu action
+    fn execute_menu_action(&mut self) {
+        if let Some(action) = self.context_menu.selected_action() {
+            let path = self.context_menu.segment_path.clone();
+            let is_folder = self.context_menu.is_folder;
+
+            match action {
+                MenuAction::Open => {
+                    if is_folder {
+                        self.navigate_into(PathBuf::from(&path));
+                    } else {
+                        // Open file with system handler
+                        #[cfg(unix)]
+                        let _ = std::process::Command::new("xdg-open").arg(&path).spawn();
+                        #[cfg(target_os = "macos")]
+                        let _ = std::process::Command::new("open").arg(&path).spawn();
+                        #[cfg(target_os = "windows")]
+                        let _ = std::process::Command::new("cmd")
+                            .args(["/C", "start", &path])
+                            .spawn();
+                    }
+                }
+                MenuAction::OpenTerminal => {
+                    if is_folder {
+                        // Try common terminal emulators
+                        let terminals =
+                            ["alacritty", "kitty", "gnome-terminal", "xterm", "konsole"];
+                        for term in &terminals {
+                            if let Ok(mut child) =
+                                std::process::Command::new(term).current_dir(&path).spawn()
+                            {
+                                let _ = child.wait();
+                                break;
+                            }
+                        }
+                    }
+                }
+                MenuAction::CenterMap => {
+                    if is_folder {
+                        self.navigate_into(PathBuf::from(&path));
+                    }
+                }
+                MenuAction::CopyPath => {
+                    // Copy path to clipboard using xclip/xsel on Linux
+                    #[cfg(unix)]
+                    {
+                        let _ = std::process::Command::new("xclip")
+                            .args(["-selection", "clipboard"])
+                            .arg(&path)
+                            .spawn()
+                            .or_else(|_| {
+                                std::process::Command::new("xsel")
+                                    .args(["--clipboard", "--input"])
+                                    .arg(&path)
+                                    .spawn()
+                            });
+                    }
+                    self.status_message = format!("Copied: {}", path);
+                }
+                MenuAction::Rescan => {
+                    self.start_scan();
+                }
+                MenuAction::Delete => {
+                    // Delete file or directory
+                    let path_buf = PathBuf::from(&path);
+                    if is_folder {
+                        if let Err(e) = std::fs::remove_dir_all(&path_buf) {
+                            self.status_message = format!("Error: {}", e);
+                        } else {
+                            self.status_message = format!("Deleted: {}", path);
+                            self.start_scan();
+                        }
+                    } else {
+                        if let Err(e) = std::fs::remove_file(&path_buf) {
+                            self.status_message = format!("Error: {}", e);
+                        } else {
+                            self.status_message = format!("Deleted: {}", path);
+                            self.start_scan();
+                        }
+                    }
+                }
+            }
+        }
+
+        self.context_menu.hide();
     }
 
     /// Navigate up to parent directory
