@@ -197,6 +197,10 @@ impl App {
             MouseEventKind::Down(MouseButton::Left) => {
                 self.handle_click_at(mouse.column, mouse.row);
             }
+            MouseEventKind::Down(MouseButton::Right) => {
+                // Right-click navigates up
+                self.navigate_up();
+            }
             MouseEventKind::Moved => {
                 self.handle_hover_at(mouse.column, mouse.row);
             }
