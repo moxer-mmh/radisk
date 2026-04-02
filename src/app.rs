@@ -561,19 +561,29 @@ impl App {
                     }
                 }
                 MenuAction::CopyPath => {
-                    // Copy path to clipboard using arboard
-                    match arboard::Clipboard::new() {
-                        Ok(mut clipboard) => match clipboard.set_text(&path) {
-                            Ok(_) => {
-                                self.status_message = format!("Copied: {}", path);
-                            }
-                            Err(e) => {
-                                self.status_message = format!("Failed to copy: {}", e);
-                            }
-                        },
-                        Err(e) => {
-                            self.status_message = format!("Clipboard unavailable: {}", e);
-                        }
+                    // Try wl-copy (Wayland) first
+                    let result = std::process::Command::new("wl-copy")
+                        .arg(&path)
+                        .stdin(std::process::Stdio::null())
+                        .stdout(std::process::Stdio::null())
+                        .stderr(std::process::Stdio::null())
+                        .spawn();
+
+                    // Fallback to xclip (X11)
+                    if result.is_err() {
+                        let _ = std::process::Command::new("xclip")
+                            .args(["-selection", "clipboard"])
+                            .stdin(std::process::Stdio::piped())
+                            .stdout(std::process::Stdio::null())
+                            .stderr(std::process::Stdio::null())
+                            .spawn()
+                            .and_then(|mut child| {
+                                use std::io::Write;
+                                if let Some(mut stdin) = child.stdin.take() {
+                                    stdin.write_all(path.as_bytes())?;
+                                }
+                                Ok(())
+                            });
                     }
                 }
                 MenuAction::Rescan => {
