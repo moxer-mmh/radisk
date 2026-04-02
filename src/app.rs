@@ -561,21 +561,20 @@ impl App {
                     }
                 }
                 MenuAction::CopyPath => {
-                    // Copy path to clipboard using xclip/xsel on Linux
-                    #[cfg(unix)]
-                    {
-                        let _ = std::process::Command::new("xclip")
-                            .args(["-selection", "clipboard"])
-                            .arg(&path)
-                            .spawn()
-                            .or_else(|_| {
-                                std::process::Command::new("xsel")
-                                    .args(["--clipboard", "--input"])
-                                    .arg(&path)
-                                    .spawn()
-                            });
+                    // Copy path to clipboard using arboard
+                    match arboard::Clipboard::new() {
+                        Ok(mut clipboard) => match clipboard.set_text(&path) {
+                            Ok(_) => {
+                                self.status_message = format!("Copied: {}", path);
+                            }
+                            Err(e) => {
+                                self.status_message = format!("Failed to copy: {}", e);
+                            }
+                        },
+                        Err(e) => {
+                            self.status_message = format!("Clipboard unavailable: {}", e);
+                        }
                     }
-                    self.status_message = format!("Copied: {}", path);
                 }
                 MenuAction::Rescan => {
                     self.start_scan();
