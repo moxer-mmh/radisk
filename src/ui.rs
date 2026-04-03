@@ -268,9 +268,9 @@ fn render_radial_map(f: &mut Frame, app: &App, area: Rect) {
 /// Render status bar
 fn render_status_bar(f: &mut Frame, app: &App, area: Rect) {
     let help_text = if app.hovered_uuid.is_some() {
-        "[u/Backspace] Up  [Enter] Open  [+/-] Zoom  [r] Rescan  [?] Help  [q] Quit"
+        "[u/Backspace] Up  [Enter] Open  [d] Delete  [+/-] Zoom  [r] Rescan  [?] Help  [q] Quit"
     } else {
-        "[u/Backspace] Up  [+/-] Zoom  [r] Rescan  [Tab] Focus  [?] Help  [q] Quit"
+        "[u/Backspace] Up  [d] Delete  [+/-] Zoom  [r] Rescan  [Tab] Focus  [?] Help  [q] Quit"
     };
 
     let status_line = Line::from(vec![
@@ -352,6 +352,10 @@ fn render_help(f: &mut Frame, app: &App) {
         Line::from(vec![
             Span::styled("  r          ", Style::default().fg(Color::White)),
             Span::raw("Rescan directory"),
+        ]),
+        Line::from(vec![
+            Span::styled("  d          ", Style::default().fg(Color::White)),
+            Span::raw("Delete selected item"),
         ]),
         Line::from(vec![
             Span::styled("  Tab        ", Style::default().fg(Color::White)),
