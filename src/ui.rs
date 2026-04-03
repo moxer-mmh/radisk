@@ -316,6 +316,12 @@ fn render_help(f: &mut Frame, app: &App) {
     // First render the main view behind
     render_viewing(f, app);
 
+    // Render dark overlay to dim the background
+    let overlay = Block::default()
+        .style(Style::default().bg(Color::Rgb(10, 10, 15)))
+        .borders(Borders::NONE);
+    f.render_widget(overlay, f.area());
+
     // Then overlay help
     let help_area = centered_rect(60, 70, area);
 
@@ -323,62 +329,62 @@ fn render_help(f: &mut Frame, app: &App) {
         Line::from(Span::styled(
             "Keyboard Shortcuts",
             Style::default()
-                .fg(Color::Cyan)
+                .fg(Color::White)
                 .add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
         Line::from(vec![
-            Span::styled("  q/Esc      ", Style::default().fg(Color::Yellow)),
+            Span::styled("  q/Esc      ", Style::default().fg(Color::White)),
             Span::raw("Quit"),
         ]),
         Line::from(vec![
-            Span::styled("  u/Backspace", Style::default().fg(Color::Yellow)),
+            Span::styled("  u/Backspace", Style::default().fg(Color::White)),
             Span::raw("Go to parent directory"),
         ]),
         Line::from(vec![
-            Span::styled("  Enter      ", Style::default().fg(Color::Yellow)),
+            Span::styled("  Enter      ", Style::default().fg(Color::White)),
             Span::raw("Open selected folder"),
         ]),
         Line::from(vec![
-            Span::styled("  +/-/=      ", Style::default().fg(Color::Yellow)),
+            Span::styled("  +/-/=      ", Style::default().fg(Color::White)),
             Span::raw("Zoom in/out (change ring depth)"),
         ]),
         Line::from(vec![
-            Span::styled("  r          ", Style::default().fg(Color::Yellow)),
+            Span::styled("  r          ", Style::default().fg(Color::White)),
             Span::raw("Rescan directory"),
         ]),
         Line::from(vec![
-            Span::styled("  Tab        ", Style::default().fg(Color::Yellow)),
+            Span::styled("  Tab        ", Style::default().fg(Color::White)),
             Span::raw("Toggle focus (map/sidebar)"),
         ]),
         Line::from(vec![
-            Span::styled("  j/k        ", Style::default().fg(Color::Yellow)),
+            Span::styled("  j/k        ", Style::default().fg(Color::White)),
             Span::raw("Navigate up/down in sidebar"),
         ]),
         Line::from(vec![
-            Span::styled("  ?          ", Style::default().fg(Color::Yellow)),
+            Span::styled("  ?          ", Style::default().fg(Color::White)),
             Span::raw("Show this help"),
         ]),
         Line::from(""),
         Line::from(Span::styled(
             "Mouse",
             Style::default()
-                .fg(Color::Cyan)
+                .fg(Color::White)
                 .add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
         Line::from(vec![
-            Span::styled("  Left click ", Style::default().fg(Color::Yellow)),
+            Span::styled("  Left click ", Style::default().fg(Color::White)),
             Span::raw("Open folder / Go up (center)"),
         ]),
         Line::from(vec![
-            Span::styled("  Scroll     ", Style::default().fg(Color::Yellow)),
+            Span::styled("  Scroll     ", Style::default().fg(Color::White)),
             Span::raw("Zoom in/out"),
         ]),
         Line::from(""),
         Line::from(Span::styled(
             "Press any key to close",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(Color::Gray),
         )),
     ];
 
@@ -387,9 +393,9 @@ fn render_help(f: &mut Frame, app: &App) {
             Block::default()
                 .borders(Borders::ALL)
                 .title(" Help ")
-                .border_style(Style::default().fg(Color::Green)),
+                .border_style(Style::default().fg(Color::White)),
         )
-        .style(Style::default().bg(Color::Black));
+        .style(Style::default().bg(Color::Rgb(20, 20, 30)));
 
     f.render_widget(help, help_area);
 }
