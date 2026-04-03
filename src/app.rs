@@ -414,29 +414,26 @@ impl App {
                 let items = self.sidebar_items();
                 if hover_index < items.len() {
                     self.sidebar_hover_index = Some(hover_index);
+                    self.sync_hover_to_canvas();
                 } else {
                     self.sidebar_hover_index = None;
+                    self.hovered_uuid = None;
+                    self.renderer.set_hovered(None);
                 }
             } else {
                 self.sidebar_hover_index = None;
+                self.hovered_uuid = None;
+                self.renderer.set_hovered(None);
             }
-            // Clear map hover when in sidebar
-            self.hovered_uuid = None;
-            self.renderer.set_hovered(None);
             return;
         }
 
         // Clear sidebar hover when in map
         self.sidebar_hover_index = None;
 
-        // Convert to canvas coordinates and handle hover
-        if let Some((canvas_x, canvas_y)) = self.terminal_to_canvas(col, row) {
-            self.handle_canvas_hover(canvas_x, canvas_y);
-        } else {
-            // Not in map area
-            self.hovered_uuid = None;
-            self.renderer.set_hovered(None);
-        }
+        // Handle as map hover
+        self.handle_canvas_hover(col as f64, row as f64);
+        self.sync_hover_to_sidebar();
     }
 
     /// Handle mouse click in canvas coordinates
@@ -500,6 +497,86 @@ impl App {
         }
 
         // No segment found
+        self.hovered_uuid = None;
+        self.renderer.set_hovered(None);
+        self.sidebar_hover_index = None;
+    }
+
+    /// Sync canvas hover to sidebar
+    fn sync_hover_to_sidebar(&mut self) {
+        if let Some(uuid) = self.hovered_uuid {
+            if let Some(ref map) = self.radial_map {
+                if let Some(segment) = self.renderer.find_segment(map, &uuid) {
+                    let items = self.sidebar_items();
+                    for (i, item) in items.iter().enumerate() {
+                        let item_path = match item {
+                            TreeItem::File(id, _) => self
+                                .arena
+                                .as_ref()
+                                .unwrap()
+                                .file(*id)
+                                .path
+                                .to_string_lossy()
+                                .into_owned(),
+                            TreeItem::Folder(id, _) => self
+                                .arena
+                                .as_ref()
+                                .unwrap()
+                                .folder(*id)
+                                .file
+                                .path
+                                .to_string_lossy()
+                                .into_owned(),
+                        };
+                        if item_path == segment.path {
+                            self.sidebar_hover_index = Some(i);
+                            return;
+                        }
+                    }
+                }
+            }
+        }
+        self.sidebar_hover_index = None;
+    }
+
+    /// Sync sidebar hover to canvas
+    fn sync_hover_to_canvas(&mut self) {
+        if let Some(hover_idx) = self.sidebar_hover_index {
+            let items = self.sidebar_items();
+            if let Some(item) = items.get(hover_idx) {
+                let path = match item {
+                    TreeItem::File(id, _) => self
+                        .arena
+                        .as_ref()
+                        .unwrap()
+                        .file(*id)
+                        .path
+                        .to_string_lossy()
+                        .into_owned(),
+                    TreeItem::Folder(id, _) => self
+                        .arena
+                        .as_ref()
+                        .unwrap()
+                        .folder(*id)
+                        .file
+                        .path
+                        .to_string_lossy()
+                        .into_owned(),
+                };
+
+                if let Some(ref map) = self.radial_map {
+                    for ring in &map.rings {
+                        for segment in &ring.segments {
+                            if segment.path == path {
+                                self.hovered_uuid = Some(segment.uuid);
+                                self.renderer.set_hovered(Some(segment.uuid));
+                                return;
+                            }
+                        }
+                    }
+                }
+            }
+        }
         self.hovered_uuid = None;
         self.renderer.set_hovered(None);
     }
@@ -780,6 +857,8 @@ impl App {
     fn move_hover_up(&mut self) {
         if self.sidebar_index > 0 {
             self.sidebar_index -= 1;
+            self.sidebar_hover_index = Some(self.sidebar_index);
+            self.sync_hover_to_canvas();
         }
     }
 
@@ -790,6 +869,8 @@ impl App {
                 let items = arena.folder_items(root_id);
                 if self.sidebar_index < items.len().saturating_sub(1) {
                     self.sidebar_index += 1;
+                    self.sidebar_hover_index = Some(self.sidebar_index);
+                    self.sync_hover_to_canvas();
                 }
             }
         }
