@@ -1,6 +1,5 @@
 use crate::app::{App, AppMode, Focus};
 use crate::color::center_color;
-use crate::renderer::ArcShape;
 use crate::tree::{format_size, TreeItem};
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},

@@ -5,9 +5,11 @@ use uuid::Uuid;
 pub const MAX_DEGREE: u32 = 5760; // 360 * 16 (16ths of degrees)
 pub const DEGREE_FACTOR: u32 = 16;
 pub const DEFAULT_RING_DEPTH: usize = 5;
+#[allow(dead_code)]
 pub const MIN_RING_DEPTH: usize = 0;
 
 /// A segment in the radial map (port of RadialMap::Segment)
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct Segment {
     pub uuid: Uuid,
@@ -41,6 +43,7 @@ impl Segment {
         self.angle_length as f64 / DEGREE_FACTOR as f64
     }
 
+    #[allow(dead_code)]
     pub fn end_degrees(&self) -> f64 {
         self.end_angle() as f64 / DEGREE_FACTOR as f64
     }
@@ -56,6 +59,7 @@ pub struct RingLevel {
 }
 
 /// The complete radial map signature
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct RadialMap {
     pub rings: Vec<RingLevel>,
@@ -353,16 +357,19 @@ fn find_folder_by_path(
 }
 
 /// Get all segments from the radial map (flattened)
+#[allow(dead_code)]
 pub fn all_segments(map: &RadialMap) -> Vec<&Segment> {
     map.rings.iter().flat_map(|r| r.segments.iter()).collect()
 }
 
 /// Find a segment by UUID
+#[allow(dead_code)]
 pub fn find_segment<'a>(map: &'a RadialMap, uuid: &Uuid) -> Option<&'a Segment> {
     all_segments(map).into_iter().find(|s| s.uuid == *uuid)
 }
 
 /// Find segment at a given angle and radius
+#[allow(dead_code)]
 pub fn find_segment_at(map: &RadialMap, angle_degrees: f64, radius: f64) -> Option<&Segment> {
     // Convert angle to 16ths of degrees
     let angle_16ths = ((angle_degrees * DEGREE_FACTOR as f64) as u32) % MAX_DEGREE;

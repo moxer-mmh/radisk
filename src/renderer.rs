@@ -5,11 +5,15 @@ use ratatui::widgets::canvas::{Painter, Shape};
 use uuid::Uuid;
 
 /// Braille resolution constants
+#[allow(dead_code)]
 const BRAILLE_WIDTH: usize = 2;
+#[allow(dead_code)]
 const BRAILLE_HEIGHT: usize = 4;
 
 /// Braille dot pattern mapping (Unicode offset)
+#[allow(dead_code)]
 const BRAILLE_OFFSET: u32 = 0x2800;
+#[allow(dead_code)]
 const BRAILLE_PATTERN: [[u32; BRAILLE_WIDTH]; BRAILLE_HEIGHT] = [
     [0x01, 0x08], // row 0: dots 1, 4
     [0x02, 0x10], // row 1: dots 2, 5
@@ -18,6 +22,7 @@ const BRAILLE_PATTERN: [[u32; BRAILLE_WIDTH]; BRAILLE_HEIGHT] = [
 ];
 
 /// A single braille cell with dots and color
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy)]
 pub struct BrailleCell {
     pub dots: u32,
@@ -33,6 +38,7 @@ impl Default for BrailleCell {
     }
 }
 
+#[allow(dead_code)]
 impl BrailleCell {
     pub fn new() -> Self {
         Self::default()
@@ -59,12 +65,14 @@ impl BrailleCell {
 }
 
 /// Braille buffer for rendering
+#[allow(dead_code)]
 pub struct BrailleBuffer {
     width: usize,
     height: usize,
     cells: Vec<Vec<BrailleCell>>,
 }
 
+#[allow(dead_code)]
 impl BrailleBuffer {
     pub fn new(width: usize, height: usize) -> Self {
         let cells = vec![vec![BrailleCell::new(); width]; height];
@@ -114,6 +122,7 @@ impl BrailleBuffer {
 }
 
 /// Canvas coordinate system for the radial map
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct CanvasCoords {
     pub center_x: f64,
@@ -135,6 +144,7 @@ impl CanvasCoords {
     }
 
     /// Convert polar coordinates (angle in degrees, radius) to pixel coordinates
+    #[allow(dead_code)]
     pub fn polar_to_pixel(&self, angle_degrees: f64, radius: f64) -> (f64, f64) {
         let angle_rad = angle_degrees.to_radians();
         let x = self.center_x + radius * angle_rad.cos();
@@ -156,6 +166,7 @@ impl CanvasCoords {
 }
 
 /// Check if a point is within an arc segment
+#[allow(dead_code)]
 pub fn is_point_in_arc(
     px: f64,
     py: f64,
@@ -335,6 +346,7 @@ impl RadialRenderer {
         self.hovered_uuid = uuid;
     }
 
+    #[allow(dead_code)]
     pub fn hovered(&self) -> Option<Uuid> {
         self.hovered_uuid
     }
@@ -411,6 +423,7 @@ impl RadialRenderer {
     }
 
     /// Find which segment is at a given screen position
+    #[allow(dead_code)]
     pub fn hit_test(
         &self,
         map: &RadialMap,

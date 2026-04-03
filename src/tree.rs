@@ -9,6 +9,7 @@ pub struct FileId(pub usize);
 pub struct FolderId(pub usize);
 
 /// A file entry in the tree
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct File {
     pub name: String,
@@ -75,10 +76,12 @@ impl TreeArena {
         &mut self.folders[id.0]
     }
 
+    #[allow(dead_code)]
     pub fn files(&self) -> &[File] {
         &self.files
     }
 
+    #[allow(dead_code)]
     pub fn folders(&self) -> &[Folder] {
         &self.folders
     }

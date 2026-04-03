@@ -27,6 +27,7 @@ pub enum Focus {
 }
 
 /// Navigation history entry
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct NavEntry {
     pub path: PathBuf,
@@ -43,6 +44,7 @@ pub struct App {
     pub radial_map: Option<RadialMap>,
     pub renderer: RadialRenderer,
     pub hovered_uuid: Option<Uuid>,
+    #[allow(dead_code)]
     pub selected_uuid: Option<Uuid>,
     pub sidebar_index: usize,
     pub sidebar_hover_index: Option<usize>,

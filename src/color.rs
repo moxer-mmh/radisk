@@ -1,6 +1,7 @@
 use crate::radial::{Segment, DEGREE_FACTOR};
 
 /// Color scheme matching FileLight's implementation
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ColorScheme {
     Rainbow,
@@ -204,6 +205,7 @@ pub fn hover_color(segment: &Segment, depth: usize, config: &ColorConfig) -> Rgb
 }
 
 /// Convert xterm-256 color index to RGB
+#[allow(dead_code)]
 pub fn xterm256_to_rgb(index: u8) -> Rgb {
     // Standard xterm-256 color cube
     if index < 16 {
@@ -242,6 +244,7 @@ pub fn xterm256_to_rgb(index: u8) -> Rgb {
 }
 
 /// Find closest xterm-256 color index to an RGB color
+#[allow(dead_code)]
 pub fn rgb_to_xterm256(color: Rgb) -> u8 {
     // Check grayscale
     if color.r == color.g && color.g == color.b {

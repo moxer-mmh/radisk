@@ -63,6 +63,7 @@ fn get_file_size(path: &Path) -> u64 {
 }
 
 /// Check if a path is a symlink
+#[allow(dead_code)]
 fn is_symlink(path: &Path) -> bool {
     std::fs::symlink_metadata(path)
         .map(|m| m.file_type().is_symlink())
