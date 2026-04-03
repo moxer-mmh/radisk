@@ -233,10 +233,46 @@ impl App {
             KeyCode::Char('+') | KeyCode::Char('=') => self.zoom_in(),
             KeyCode::Char('-') => self.zoom_out(),
             KeyCode::Char('r') => self.start_scan(),
+            KeyCode::Char('d') => self.trigger_delete(),
             KeyCode::Tab => self.toggle_focus(),
             KeyCode::Up | KeyCode::Char('k') => self.move_hover_up(),
             KeyCode::Down | KeyCode::Char('j') => self.move_hover_down(),
             _ => {}
+        }
+    }
+
+    /// Trigger delete action for the currently selected item
+    fn trigger_delete(&mut self) {
+        // Check sidebar selection first
+        let items = self.sidebar_items();
+        if let Some(item) = items.get(self.sidebar_index) {
+            let (path, is_folder) = match item {
+                TreeItem::File(id, _) => {
+                    let file = self.arena.as_ref().unwrap().file(*id);
+                    (file.path.clone(), false)
+                }
+                TreeItem::Folder(id, _) => {
+                    let folder = self.arena.as_ref().unwrap().folder(*id);
+                    (folder.file.path.clone(), true)
+                }
+            };
+            self.delete_path = Some(path);
+            self.delete_is_folder = is_folder;
+            self.delete_selected = true;
+            self.mode = AppMode::ConfirmDelete;
+            return;
+        }
+
+        // Otherwise use map hover
+        if let Some(uuid) = self.hovered_uuid {
+            if let Some(ref map) = self.radial_map {
+                if let Some(segment) = self.renderer.find_segment(map, &uuid) {
+                    self.delete_path = Some(PathBuf::from(&segment.path));
+                    self.delete_is_folder = segment.is_folder;
+                    self.delete_selected = true;
+                    self.mode = AppMode::ConfirmDelete;
+                }
+            }
         }
     }
 
