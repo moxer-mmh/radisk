@@ -235,6 +235,33 @@ fn render_radial_map(f: &mut Frame, app: &App, area: Rect) {
         });
 
     f.render_widget(canvas, area);
+
+    // Overlay center text (folder name + total size)
+    let center_text = format!(
+        "{}\n{}",
+        map.root_name,
+        crate::tree::format_size(map.root_size)
+    );
+
+    // Calculate text area size based on center circle radius
+    // The diagonal of the inscribed square = 2 * radius / sqrt(2)
+    let text_width = (map.center_radius * 1.2) as u16;
+    let text_height = 2;
+    let text_width = text_width.max(8).min(area.width.saturating_sub(4));
+
+    // Position text in center of canvas area
+    let text_area = Rect {
+        x: area.x + area.width / 2 - text_width / 2,
+        y: area.y + area.height / 2 - text_height / 2,
+        width: text_width,
+        height: text_height,
+    };
+
+    let label = Paragraph::new(center_text)
+        .style(Style::default().fg(Color::White).bg(Color::Rgb(30, 30, 46)))
+        .alignment(ratatui::layout::Alignment::Center);
+
+    f.render_widget(label, text_area);
 }
 
 /// Render status bar
