@@ -30,6 +30,7 @@ pub struct ContextMenu {
     pub x: u16,
     pub y: u16,
     pub selected_index: usize,
+    pub hovered_index: Option<usize>,
     pub segment_uuid: Option<Uuid>,
     pub segment_name: String,
     pub segment_path: String,
@@ -43,6 +44,7 @@ impl ContextMenu {
             x: 0,
             y: 0,
             selected_index: 0,
+            hovered_index: None,
             segment_uuid: None,
             segment_name: String::new(),
             segment_path: String::new(),
@@ -64,6 +66,7 @@ impl ContextMenu {
         self.x = x;
         self.y = y;
         self.selected_index = 0;
+        self.hovered_index = None;
         self.segment_uuid = Some(uuid);
         self.segment_name = name;
         self.segment_path = path;
@@ -74,6 +77,7 @@ impl ContextMenu {
     pub fn hide(&mut self) {
         self.visible = false;
         self.segment_uuid = None;
+        self.hovered_index = None;
     }
 
     /// Get available menu items based on segment type
@@ -118,6 +122,30 @@ impl ContextMenu {
     /// Get the currently selected action
     pub fn selected_action(&self) -> Option<MenuAction> {
         self.menu_items().get(self.selected_index).copied()
+    }
+
+    /// Update hovered item based on mouse position
+    /// terminal_width and terminal_height are used for bounds checking
+    pub fn update_hover(&mut self, col: u16, row: u16, terminal_width: u16, terminal_height: u16) {
+        let items = self.menu_items();
+        let menu_width: u16 = 25;
+        let menu_height: u16 = items.len() as u16 + 2; // +2 for borders
+
+        // Apply same bounds checking as rendering
+        let menu_x = self.x.min(terminal_width.saturating_sub(menu_width));
+        let menu_y = self.y.min(terminal_height.saturating_sub(menu_height));
+
+        // Check if mouse is within menu bounds
+        if col >= menu_x && col < menu_x + menu_width && row > menu_y && row < menu_y + menu_height
+        {
+            let hover_index = (row - menu_y - 1) as usize; // -1 for top border
+            if hover_index < items.len() {
+                self.hovered_index = Some(hover_index);
+                return;
+            }
+        }
+
+        self.hovered_index = None;
     }
 }
 

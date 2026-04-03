@@ -221,20 +221,13 @@ fn render_radial_map(f: &mut Frame, app: &App, area: Rect) {
             });
 
             // Draw segments from innermost to outermost
-            for ring in &map.rings {
-                for segment in &ring.segments {
-                    let colors = app.renderer.get_segment_colors(segment, ring.depth);
+            let (fill_shapes, stroke_shapes) = app.renderer.render_shapes(map);
 
-                    ctx.draw(&ArcShape {
-                        start_angle: segment.start_degrees(),
-                        sweep_angle: segment.sweep_degrees(),
-                        inner_radius: ring.inner_radius,
-                        outer_radius: ring.outer_radius,
-                        color: colors.fill.to_ratatui(),
-                        center_x: 0.0,
-                        center_y: 0.0,
-                    });
-                }
+            for shape in fill_shapes {
+                ctx.draw(&shape);
+            }
+            for shape in stroke_shapes {
+                ctx.draw(&shape);
             }
         });
 
@@ -396,12 +389,18 @@ fn render_context_menu(f: &mut Frame, app: &App) {
         .iter()
         .enumerate()
         .map(|(i, action)| {
-            let style = if i == menu.selected_index {
-                Style::default().fg(Color::Black).bg(Color::White)
+            let style = if i == menu.selected_index || menu.hovered_index == Some(i) {
+                // Yellow background for selected/hovered
+                Style::default().fg(Color::White).bg(Color::Yellow)
             } else {
+                // Normal
                 Style::default().fg(Color::White)
             };
-            let prefix = if i == menu.selected_index { "> " } else { "  " };
+            let prefix = if i == menu.selected_index || menu.hovered_index == Some(i) {
+                "> "
+            } else {
+                "  "
+            };
             let content = format!("{}{}", prefix, action.label());
             ListItem::new(content).style(style)
         })

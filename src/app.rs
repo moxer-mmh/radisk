@@ -228,7 +228,15 @@ impl App {
                 self.show_context_menu(mouse.column, mouse.row);
             }
             MouseEventKind::Moved => {
-                if !self.context_menu.visible {
+                if self.context_menu.visible {
+                    // Update context menu hover
+                    self.context_menu.update_hover(
+                        mouse.column,
+                        mouse.row,
+                        self.terminal_size.0,
+                        self.terminal_size.1,
+                    );
+                } else {
                     self.handle_hover_at(mouse.column, mouse.row);
                 }
             }
@@ -470,7 +478,42 @@ impl App {
 
     /// Show context menu at cursor position if hovering over a segment
     fn show_context_menu(&mut self, col: u16, row: u16) {
-        // Get the segment under cursor
+        // Check if right-click is in sidebar
+        let sidebar = self.sidebar_area();
+        if col >= sidebar.x && col < sidebar.x + sidebar.width {
+            // Click is in sidebar
+            if row >= 2 {
+                let clicked_index = (row - 2) as usize;
+                let items = self.sidebar_items();
+                if let Some(item) = items.get(clicked_index) {
+                    let (name, path, is_folder) = match item {
+                        TreeItem::File(id, _) => {
+                            let file = self.arena.as_ref().unwrap().file(*id);
+                            (
+                                file.name.clone(),
+                                file.path.to_string_lossy().into_owned(),
+                                false,
+                            )
+                        }
+                        TreeItem::Folder(id, _) => {
+                            let folder = self.arena.as_ref().unwrap().folder(*id);
+                            (
+                                folder.file.name.clone(),
+                                folder.file.path.to_string_lossy().into_owned(),
+                                true,
+                            )
+                        }
+                    };
+                    // Use a dummy UUID for sidebar items since they don't have segment UUIDs
+                    self.context_menu
+                        .show(col, row, Uuid::nil(), name, path, is_folder);
+                    return;
+                }
+            }
+            return;
+        }
+
+        // Otherwise check for map segment
         if let Some(uuid) = self.hovered_uuid {
             if let Some(ref map) = self.radial_map {
                 // Find the segment
@@ -498,16 +541,18 @@ impl App {
         // Calculate which menu item was clicked
         let menu = &self.context_menu;
         let items = menu.menu_items();
-        let menu_x = menu.x;
-        let menu_y = menu.y;
         let menu_width: u16 = 25;
+        let menu_height: u16 = items.len() as u16 + 2; // +2 for borders
 
-        if col >= menu_x
-            && col < menu_x + menu_width
-            && row > menu_y
-            && row <= menu_y + items.len() as u16
+        // Apply same bounds checking as render_context_menu
+        let menu_x = menu.x.min(self.terminal_size.0.saturating_sub(menu_width));
+        let menu_y = menu.y.min(self.terminal_size.1.saturating_sub(menu_height));
+
+        // Check if click is within menu bounds
+        if col >= menu_x && col < menu_x + menu_width && row > menu_y && row < menu_y + menu_height
         {
-            let clicked_index = (row - menu_y - 1) as usize;
+            // Click is inside menu - calculate which item
+            let clicked_index = (row - menu_y - 1) as usize; // -1 for top border
             if clicked_index < items.len() {
                 self.context_menu.selected_index = clicked_index;
                 self.execute_menu_action();
@@ -638,6 +683,23 @@ impl App {
 
     /// Navigate into the currently hovered folder
     fn navigate_into_hovered(&mut self) {
+        // If sidebar has focus, use sidebar selection
+        if self.focus == Focus::Sidebar {
+            let items = self.sidebar_items();
+            if let Some(item) = items.get(self.sidebar_index) {
+                if item.is_folder() {
+                    if let Some(ref arena) = self.arena {
+                        if let TreeItem::Folder(id, _) = item {
+                            let path = arena.folder(*id).file.path.clone();
+                            self.navigate_into(path);
+                        }
+                    }
+                }
+            }
+            return;
+        }
+
+        // Otherwise use map hover
         if let Some(uuid) = self.hovered_uuid {
             if let Some(ref map) = self.radial_map {
                 if let Some(segment) = self.renderer.find_segment(map, &uuid) {

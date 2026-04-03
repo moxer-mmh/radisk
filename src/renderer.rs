@@ -223,6 +223,38 @@ impl Shape for ArcShape {
     }
 }
 
+/// Shape for drawing a stroke line between segments
+pub struct ArcStrokeShape {
+    pub angle: f64,
+    pub inner_radius: f64,
+    pub outer_radius: f64,
+    pub color: Color,
+    pub center_x: f64,
+    pub center_y: f64,
+}
+
+impl Shape for ArcStrokeShape {
+    fn draw(&self, painter: &mut Painter<'_, '_>) {
+        if self.outer_radius <= self.inner_radius {
+            return;
+        }
+
+        let angle_rad = self.angle.to_radians();
+        let steps = ((self.outer_radius - self.inner_radius) * 2.0).ceil() as i32;
+
+        for r in 0..=steps {
+            let radius = self.inner_radius
+                + (self.outer_radius - self.inner_radius) * (r as f64) / (steps as f64);
+            let x = self.center_x + radius * angle_rad.cos();
+            let y = self.center_y + radius * angle_rad.sin();
+
+            if let Some((px, py)) = painter.get_point(x, y) {
+                painter.paint(px, py, self.color);
+            }
+        }
+    }
+}
+
 /// Shape for drawing the center circle
 pub struct CenterShape {
     pub radius: f64,
@@ -289,15 +321,16 @@ impl RadialRenderer {
     }
 
     /// Render the radial map to canvas shapes
-    pub fn render_shapes(&self, map: &RadialMap) -> Vec<ArcShape> {
-        let mut shapes = Vec::new();
+    pub fn render_shapes(&self, map: &RadialMap) -> (Vec<ArcShape>, Vec<ArcStrokeShape>) {
+        let mut fill_shapes = Vec::new();
+        let mut stroke_shapes = Vec::new();
 
         // Render from outermost to innermost (reverse order for proper z-ordering)
         for ring in map.rings.iter().rev() {
             for segment in &ring.segments {
                 let colors = self.get_segment_colors(segment, ring.depth);
 
-                shapes.push(ArcShape {
+                fill_shapes.push(ArcShape {
                     start_angle: segment.start_degrees(),
                     sweep_angle: segment.sweep_degrees(),
                     inner_radius: ring.inner_radius,
@@ -306,10 +339,22 @@ impl RadialRenderer {
                     center_x: 0.0,
                     center_y: 0.0,
                 });
+
+                // Draw stroke at segment start (except first segment in ring)
+                if segment.start_angle > 0 {
+                    stroke_shapes.push(ArcStrokeShape {
+                        angle: segment.start_degrees(),
+                        inner_radius: ring.inner_radius,
+                        outer_radius: ring.outer_radius,
+                        color: colors.pen.to_ratatui(),
+                        center_x: 0.0,
+                        center_y: 0.0,
+                    });
+                }
             }
         }
 
-        shapes
+        (fill_shapes, stroke_shapes)
     }
 
     /// Find which segment is at a given screen position
