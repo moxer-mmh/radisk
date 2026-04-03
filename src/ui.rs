@@ -397,6 +397,12 @@ fn render_help(f: &mut Frame, app: &App) {
         )
         .style(Style::default().bg(Color::Rgb(20, 20, 30)));
 
+    // Render solid background first to prevent canvas text from showing through
+    let bg = Block::default()
+        .style(Style::default().bg(Color::Rgb(20, 20, 30)))
+        .borders(Borders::NONE);
+    f.render_widget(bg, help_area);
+
     f.render_widget(help, help_area);
 }
 
