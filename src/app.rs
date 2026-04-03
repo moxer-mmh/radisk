@@ -431,9 +431,14 @@ impl App {
         // Clear sidebar hover when in map
         self.sidebar_hover_index = None;
 
-        // Handle as map hover
-        self.handle_canvas_hover(col as f64, row as f64);
-        self.sync_hover_to_sidebar();
+        // Handle as map hover (convert to canvas coordinates first)
+        if let Some((canvas_x, canvas_y)) = self.terminal_to_canvas(col, row) {
+            self.handle_canvas_hover(canvas_x, canvas_y);
+            self.sync_hover_to_sidebar();
+        } else {
+            self.hovered_uuid = None;
+            self.renderer.set_hovered(None);
+        }
     }
 
     /// Handle mouse click in canvas coordinates
