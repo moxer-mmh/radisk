@@ -505,7 +505,9 @@ fn render_delete_confirmation(f: &mut Frame, app: &App) {
         Line::from(""),
         Line::from(Span::styled(
             "Confirm Delete",
-            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
         Line::from(Span::styled(
@@ -515,7 +517,7 @@ fn render_delete_confirmation(f: &mut Frame, app: &App) {
         Line::from(""),
         Line::from(Span::styled(
             path_display,
-            Style::default().fg(Color::Yellow),
+            Style::default().fg(Color::White),
         )),
         Line::from(""),
         Line::from(""),
@@ -523,9 +525,9 @@ fn render_delete_confirmation(f: &mut Frame, app: &App) {
             Span::styled(
                 " [Y]es ",
                 if app.delete_selected {
-                    Style::default().fg(Color::Black).bg(Color::Green)
+                    Style::default().fg(Color::Black).bg(Color::Gray)
                 } else {
-                    Style::default().fg(Color::Green)
+                    Style::default().fg(Color::White)
                 },
             ),
             Span::raw("   "),
@@ -534,7 +536,7 @@ fn render_delete_confirmation(f: &mut Frame, app: &App) {
                 if !app.delete_selected {
                     Style::default().fg(Color::Black).bg(Color::Gray)
                 } else {
-                    Style::default().fg(Color::Gray)
+                    Style::default().fg(Color::White)
                 },
             ),
         ]),
