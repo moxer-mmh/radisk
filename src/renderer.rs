@@ -255,6 +255,36 @@ impl Shape for ArcStrokeShape {
     }
 }
 
+/// Shape for drawing a circular stroke line (ring boundary)
+pub struct CircleStrokeShape {
+    pub radius: f64,
+    pub color: Color,
+    pub center_x: f64,
+    pub center_y: f64,
+}
+
+impl Shape for CircleStrokeShape {
+    fn draw(&self, painter: &mut Painter<'_, '_>) {
+        if self.radius <= 0.0 {
+            return;
+        }
+
+        // Sample points around the circle circumference
+        let steps = (self.radius * 16.0).ceil() as i32;
+
+        for i in 0..=steps {
+            let angle = 360.0 * (i as f64) / (steps as f64);
+            let angle_rad = angle.to_radians();
+            let x = self.center_x + self.radius * angle_rad.cos();
+            let y = self.center_y + self.radius * angle_rad.sin();
+
+            if let Some((px, py)) = painter.get_point(x, y) {
+                painter.paint(px, py, self.color);
+            }
+        }
+    }
+}
+
 /// Shape for drawing the center circle
 pub struct CenterShape {
     pub radius: f64,
@@ -321,9 +351,24 @@ impl RadialRenderer {
     }
 
     /// Render the radial map to canvas shapes
-    pub fn render_shapes(&self, map: &RadialMap) -> (Vec<ArcShape>, Vec<ArcStrokeShape>) {
+    pub fn render_shapes(
+        &self,
+        map: &RadialMap,
+    ) -> (Vec<ArcShape>, Vec<ArcStrokeShape>, Vec<CircleStrokeShape>) {
         let mut fill_shapes = Vec::new();
         let mut stroke_shapes = Vec::new();
+        let mut circle_shapes = Vec::new();
+
+        // Use a neutral stroke color for ring boundaries
+        let ring_stroke_color = Color::Rgb(80, 80, 80);
+
+        // Circle at center radius
+        circle_shapes.push(CircleStrokeShape {
+            radius: map.center_radius,
+            color: ring_stroke_color,
+            center_x: 0.0,
+            center_y: 0.0,
+        });
 
         // Render from outermost to innermost (reverse order for proper z-ordering)
         for ring in map.rings.iter().rev() {
@@ -352,9 +397,17 @@ impl RadialRenderer {
                     });
                 }
             }
+
+            // Circle at ring outer boundary
+            circle_shapes.push(CircleStrokeShape {
+                radius: ring.outer_radius,
+                color: ring_stroke_color,
+                center_x: 0.0,
+                center_y: 0.0,
+            });
         }
 
-        (fill_shapes, stroke_shapes)
+        (fill_shapes, stroke_shapes, circle_shapes)
     }
 
     /// Find which segment is at a given screen position

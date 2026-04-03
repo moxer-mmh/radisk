@@ -220,13 +220,16 @@ fn render_radial_map(f: &mut Frame, app: &App, area: Rect) {
                 center_y: 0.0,
             });
 
-            // Draw segments from innermost to outermost
-            let (fill_shapes, stroke_shapes) = app.renderer.render_shapes(map);
+            // Draw segments and strokes
+            let (fill_shapes, stroke_shapes, circle_shapes) = app.renderer.render_shapes(map);
 
             for shape in fill_shapes {
                 ctx.draw(&shape);
             }
             for shape in stroke_shapes {
+                ctx.draw(&shape);
+            }
+            for shape in circle_shapes {
                 ctx.draw(&shape);
             }
         });
