@@ -16,6 +16,7 @@ pub fn render(f: &mut Frame, app: &App) {
         AppMode::Scanning => render_scanning(f, app),
         AppMode::Viewing => render_viewing(f, app),
         AppMode::Help => render_help(f, app),
+        AppMode::ConfirmDelete => render_delete_confirmation(f, app),
     }
 }
 
@@ -104,7 +105,7 @@ fn render_sidebar(f: &mut Frame, app: &App, area: Rect) {
                         .map(|a| a.file(*id).name.clone())
                         .unwrap_or_else(|| "?".to_string());
                     let mut style = Style::default().fg(Color::White);
-                    if i == app.sidebar_index && app.focus == Focus::Sidebar {
+                    if i == app.sidebar_index {
                         style = style.bg(Color::DarkGray);
                     }
                     if app.sidebar_hover_index == Some(i) {
@@ -121,7 +122,7 @@ fn render_sidebar(f: &mut Frame, app: &App, area: Rect) {
                     let mut style = Style::default()
                         .fg(Color::Cyan)
                         .add_modifier(Modifier::BOLD);
-                    if i == app.sidebar_index && app.focus == Focus::Sidebar {
+                    if i == app.sidebar_index {
                         style = style.bg(Color::DarkGray);
                     }
                     if app.sidebar_hover_index == Some(i) {
@@ -467,4 +468,88 @@ fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
             Constraint::Percentage((100 - percent_x) / 2),
         ])
         .split(popup_layout[1])[1]
+}
+
+/// Render delete confirmation dialog
+fn render_delete_confirmation(f: &mut Frame, app: &App) {
+    // First render the main view behind
+    render_viewing(f, app);
+
+    let area = f.area();
+    let delete_area = centered_rect(40, 25, area);
+
+    let path_display = app
+        .delete_path
+        .as_ref()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|| "unknown".to_string());
+
+    let type_text = if app.delete_is_folder {
+        "folder"
+    } else {
+        "file"
+    };
+
+    // Truncate path if too long
+    let max_path_len = (delete_area.width as usize).saturating_sub(4);
+    let path_display = if path_display.len() > max_path_len {
+        format!(
+            "...{}",
+            &path_display[path_display.len() - max_path_len + 3..]
+        )
+    } else {
+        path_display
+    };
+
+    let lines = vec![
+        Line::from(""),
+        Line::from(Span::styled(
+            "Confirm Delete",
+            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+        Line::from(Span::styled(
+            format!("Delete this {}?", type_text),
+            Style::default().fg(Color::White),
+        )),
+        Line::from(""),
+        Line::from(Span::styled(
+            path_display,
+            Style::default().fg(Color::Yellow),
+        )),
+        Line::from(""),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled(
+                " [Y]es ",
+                if app.delete_selected {
+                    Style::default().fg(Color::Black).bg(Color::Green)
+                } else {
+                    Style::default().fg(Color::Green)
+                },
+            ),
+            Span::raw("   "),
+            Span::styled(
+                "[N]o",
+                if !app.delete_selected {
+                    Style::default().fg(Color::Black).bg(Color::Gray)
+                } else {
+                    Style::default().fg(Color::Gray)
+                },
+            ),
+        ]),
+        Line::from(""),
+    ];
+
+    let confirm = Paragraph::new(lines)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" Delete ")
+                .border_style(Style::default().fg(Color::Red)),
+        )
+        .style(Style::default().bg(Color::Black))
+        .alignment(ratatui::layout::Alignment::Center);
+
+    f.render_widget(confirm, delete_area);
 }

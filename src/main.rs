@@ -28,7 +28,7 @@ struct Cli {
     path: PathBuf,
 
     /// Number of concentric rings to display
-    #[arg(short, long, default_value = "4")]
+    #[arg(short, long, default_value = "5")]
     depth: usize,
 }
 

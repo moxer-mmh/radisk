@@ -16,6 +16,7 @@ pub enum AppMode {
     Scanning,
     Viewing,
     Help,
+    ConfirmDelete,
 }
 
 /// Application focus
@@ -53,6 +54,9 @@ pub struct App {
     pub status_message: String,
     pub canvas_coords: Option<CanvasCoords>,
     pub context_menu: ContextMenu,
+    pub delete_path: Option<PathBuf>,
+    pub delete_is_folder: bool,
+    pub delete_selected: bool, // true = Yes, false = No
 }
 
 impl App {
@@ -77,6 +81,9 @@ impl App {
             status_message: String::new(),
             canvas_coords: None,
             context_menu: ContextMenu::new(),
+            delete_path: None,
+            delete_is_folder: false,
+            delete_selected: true, // Default to Yes
         }
     }
 
@@ -181,6 +188,27 @@ impl App {
             }
             AppMode::Help => {
                 self.mode = AppMode::Viewing;
+            }
+            AppMode::ConfirmDelete => {
+                match key.code {
+                    KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => {
+                        if self.delete_selected {
+                            self.execute_delete();
+                        } else {
+                            self.delete_path = None;
+                            self.mode = AppMode::Viewing;
+                        }
+                    }
+                    KeyCode::Left | KeyCode::Right | KeyCode::Char('j') | KeyCode::Char('k') => {
+                        self.delete_selected = !self.delete_selected;
+                    }
+                    KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+                        // Cancel delete
+                        self.delete_path = None;
+                        self.mode = AppMode::Viewing;
+                    }
+                    _ => {} // Ignore other keys
+                }
             }
         }
     }
@@ -635,23 +663,11 @@ impl App {
                     self.start_scan();
                 }
                 MenuAction::Delete => {
-                    // Delete file or directory
-                    let path_buf = PathBuf::from(&path);
-                    if is_folder {
-                        if let Err(e) = std::fs::remove_dir_all(&path_buf) {
-                            self.status_message = format!("Error: {}", e);
-                        } else {
-                            self.status_message = format!("Deleted: {}", path);
-                            self.start_scan();
-                        }
-                    } else {
-                        if let Err(e) = std::fs::remove_file(&path_buf) {
-                            self.status_message = format!("Error: {}", e);
-                        } else {
-                            self.status_message = format!("Deleted: {}", path);
-                            self.start_scan();
-                        }
-                    }
+                    // Show confirmation dialog
+                    self.delete_path = Some(PathBuf::from(&path));
+                    self.delete_is_folder = is_folder;
+                    self.context_menu.hide();
+                    self.mode = AppMode::ConfirmDelete;
                 }
             }
         }
@@ -683,20 +699,18 @@ impl App {
 
     /// Navigate into the currently hovered folder
     fn navigate_into_hovered(&mut self) {
-        // If sidebar has focus, use sidebar selection
-        if self.focus == Focus::Sidebar {
-            let items = self.sidebar_items();
-            if let Some(item) = items.get(self.sidebar_index) {
-                if item.is_folder() {
-                    if let Some(ref arena) = self.arena {
-                        if let TreeItem::Folder(id, _) = item {
-                            let path = arena.folder(*id).file.path.clone();
-                            self.navigate_into(path);
-                        }
+        // Always check sidebar selection first
+        let items = self.sidebar_items();
+        if let Some(item) = items.get(self.sidebar_index) {
+            if item.is_folder() {
+                if let Some(ref arena) = self.arena {
+                    if let TreeItem::Folder(id, _) = item {
+                        let path = arena.folder(*id).file.path.clone();
+                        self.navigate_into(path);
+                        return;
                     }
                 }
             }
-            return;
         }
 
         // Otherwise use map hover
@@ -718,6 +732,31 @@ impl App {
             self.rebuild_map();
             self.status_message = format!("Zoom: {} rings", self.ring_depth);
         }
+    }
+
+    /// Execute the pending delete operation
+    fn execute_delete(&mut self) {
+        if let Some(ref path) = self.delete_path {
+            let path_buf = path.clone();
+            let is_folder = self.delete_is_folder;
+            if is_folder {
+                if let Err(e) = std::fs::remove_dir_all(&path_buf) {
+                    self.status_message = format!("Error: {}", e);
+                } else {
+                    self.status_message = format!("Deleted: {}", path.display());
+                    self.start_scan();
+                }
+            } else {
+                if let Err(e) = std::fs::remove_file(&path_buf) {
+                    self.status_message = format!("Error: {}", e);
+                } else {
+                    self.status_message = format!("Deleted: {}", path.display());
+                    self.start_scan();
+                }
+            }
+        }
+        self.delete_path = None;
+        self.mode = AppMode::Viewing;
     }
 
     /// Zoom out (increase ring depth)
@@ -817,6 +856,7 @@ impl App {
                 }
             }
             AppMode::Help => "Press any key to close help".to_string(),
+            AppMode::ConfirmDelete => "Press Y to confirm, any other key to cancel".to_string(),
         }
     }
 

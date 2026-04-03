@@ -4,7 +4,7 @@ use uuid::Uuid;
 /// Constants matching FileLight's radialMap.h
 pub const MAX_DEGREE: u32 = 5760; // 360 * 16 (16ths of degrees)
 pub const DEGREE_FACTOR: u32 = 16;
-pub const DEFAULT_RING_DEPTH: usize = 4;
+pub const DEFAULT_RING_DEPTH: usize = 5;
 pub const MIN_RING_DEPTH: usize = 0;
 
 /// A segment in the radial map (port of RadialMap::Segment)
