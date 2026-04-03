@@ -475,6 +475,12 @@ fn render_delete_confirmation(f: &mut Frame, app: &App) {
     // First render the main view behind
     render_viewing(f, app);
 
+    // Render dark overlay to dim the background
+    let overlay = Block::default()
+        .style(Style::default().bg(Color::Rgb(20, 20, 20)))
+        .borders(Borders::NONE);
+    f.render_widget(overlay, f.area());
+
     let area = f.area();
     let delete_area = centered_rect(40, 25, area);
 
