@@ -2,35 +2,28 @@
 
 > Terminal-based radial disk usage visualizer inspired by KDE FileLight
 
-[![Build Status](https://github.com/mimobn/radisk/workflows/ci/badge.svg)](https://github.com/mimobn/radisk/actions)
-[![Crates.io](https://img.shields.io/crates/v/radisk.svg)](https://crates.io/crates/radisk)
-[![AUR](https://img.shields.io/aur/version/radisk-bin.svg)](https://aur.archlinux.org/packages/radisk-bin)
-[![License: GPL-3.0](https://img.shields.io/badge/License-GPL%203.0-blue.svg)](LICENSE)
-
+[![Build Status](https://github.com/mimobn/radisk/workflows/ci/badge.svg)](https://github.com/mimobn/radisk/actions) [![Crates.io](https://img.shields.io/crates/v/radisk.svg)](https://crates.io/crates/radisk) [![AUR](https://img.shields.io/aur/version/radisk-bin.svg)](https://aur.archlinux.org/packages/radisk-bin) [![License: GPL-3.0](https://img.shields.io/badge/License-GPL%203.0-blue.svg)](LICENSE)
+[![Buy me a coffee](https://img.shields.io/badge/☕-Buy%20me%20a%20coffee-FF5E5B?style=for-the-badge)](https://ko-fi.com/mimobn_)
 ## What is RaDisk?
 
 RaDisk is a terminal-based disk usage analyzer that visualizes your filesystem as an interactive radial map, similar to KDE FileLight. It provides a beautiful, color-coded view of disk space usage with full mouse and keyboard support.
 
-## Documentation quick links
+## Screenshots
 
-* [Installation](#installation)
+![RaDisk in foot terminal](assets/radisk-foot.png)
+
+![RaDisk in Kitty](assets/radisk-kitty.png)
+
+![RaDisk in Konsole](assets/radisk-Konsole.png)
+
+## Quick links
+
 * [Usage](#usage)
 * [Keyboard Shortcuts](#keyboard-shortcuts)
 * [Building](#building)
 * [Running tests](#running-tests)
 * [Support](#support)
 
-## Features
-
-- **Radial visualization** — Concentric rings show disk usage at a glance
-- **Braille rendering** — Smooth arc rendering using Unicode braille characters
-- **Interactive navigation** — Click to drill into folders, hover for details
-- **Mouse support** — Click, hover, scroll to zoom, right-click context menu
-- **Keyboard navigation** — Full keyboard shortcuts for power users
-- **Color-coded segments** — HSV rainbow colors with depth-based darkening
-- **File/folder sidebar** — Sorted list with synchronized hover highlighting
-- **Delete confirmation** — Safe deletion with confirmation dialog
-- **Cross-platform** — Works on Linux, macOS, and Windows
 
 ## Installation
 
