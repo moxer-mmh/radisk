@@ -24,7 +24,9 @@ use std::{io, panic, path::PathBuf, time::Duration};
 #[command(
     name = "radisk",
     about = "Terminal-based radial disk usage visualizer",
-    after_help = "Support this project: https://ko-fi.com/mimobn_"
+    after_help = format!(
+        "Support this project: \x1b]8;;https://ko-fi.com/mimobn_\x1b\\ko-fi.com/mimobn_\x1b]8;;\x1b\\"
+    )
 )]
 struct Cli {
     /// Path to scan
