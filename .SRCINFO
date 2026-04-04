@@ -1,0 +1,14 @@
+pkgbase = radisk-bin
+	pkgdesc = Terminal-based radial disk usage visualizer inspired by KDE FileLight
+	pkgver = 0.1.0
+	pkgrel = 1
+	url = https://github.com/mimobn/radisk
+	arch = x86_64
+	license = GPL-3.0-or-later
+	depends = gcc-libs
+	provides = radisk
+	conflicts = radisk
+	source = https://github.com/mimobn/radisk/releases/download/v0.1.0/radisk-0.1.0-x86_64.tar.gz
+	sha256sums = 82c7962d868ecfc406c7aedd59f8b4814a3567d4a8d6ecad7d2cffc3579ec365
+
+pkgname = radisk-bin

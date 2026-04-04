@@ -1,0 +1,18 @@
+PackageIdentifier: mimobn.radisk
+PackageVersion: 0.1.0
+PackageName: RaDisk
+Publisher: mimobn
+Author: mimobn
+License: GPL-3.0-or-later
+LicenseUrl: https://www.gnu.org/licenses/gpl-3.0.html
+Copyright: Copyright (c) 2026 mimobn
+ShortDescription: Terminal-based radial disk usage visualizer inspired by KDE FileLight
+Description: RaDisk is a terminal-based radial disk usage visualizer that provides an interactive, color-coded visualization of disk space usage, inspired by the popular KDE FileLight application.
+Moniker: radisk
+Tags:
+  - disk-usage
+  - cli
+  - visualization
+  - tui
+  - filelight
+PackageUrl: https://github.com/mimobn/radisk

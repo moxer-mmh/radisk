@@ -1,0 +1,14 @@
+PackageIdentifier: mimobn.radisk
+PackageVersion: 0.1.0
+Platform:
+  - Windows.Desktop
+InstallModes:
+  - silent
+  - silentWithProgress
+Installers:
+  - Architecture: x64
+    InstallerType: zip
+    InstallerUrl: https://github.com/mimobn/radisk/releases/download/v0.1.0/radisk-0.1.0-x86_64-windows.zip
+    InstallerSha256: 0000000000000000000000000000000000000000000000000000000000000000
+ManifestType: installer
+ManifestVersion: 1.6.0

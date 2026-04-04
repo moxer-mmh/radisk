@@ -3,6 +3,17 @@ name = "radisk"
 version = "0.1.0"
 edition = "2021"
 description = "Terminal-based radial disk usage visualizer inspired by KDE FileLight"
+authors = ["mimobn <mimobn2004@gmail.com>"]
+license = "GPL-3.0-or-later"
+repository = "https://github.com/mimobn/radisk"
+homepage = "https://github.com/mimobn/radisk"
+readme = "README.md"
+keywords = ["disk-usage", "cli", "visualization", "tui", "ascii"]
+categories = ["command-line-utilities"]
+
+[package.metadata.aur]
+depends = ["gcc-libs"]
+makedepends = ["cargo"]
 
 [dependencies]
 ratatui = "0.30"

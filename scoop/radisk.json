@@ -1,0 +1,21 @@
+{
+    "version": "0.1.0",
+    "description": "Terminal-based radial disk usage visualizer inspired by KDE FileLight",
+    "homepage": "https://github.com/mimobn/radisk",
+    "license": "GPL-3.0-or-later",
+    "architecture": {
+        "64bit": {
+            "url": "https://github.com/mimobn/radisk/releases/download/v$version/radisk-$version-x86_64-windows.zip",
+            "hash": ""
+        }
+    },
+    "bin": "radisk.exe",
+    "checkver": "github",
+    "autoupdate": {
+        "architecture": {
+            "64bit": {
+                "url": "https://github.com/mimobn/radisk/releases/download/v$version/radisk-$version-x86_64-windows.zip"
+            }
+        }
+    }
+}
