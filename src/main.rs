@@ -21,7 +21,11 @@ use ratatui::{backend::CrosstermBackend, Terminal};
 use std::{io, panic, path::PathBuf, time::Duration};
 
 #[derive(Parser)]
-#[command(name = "radisk", about = "Terminal-based radial disk usage visualizer")]
+#[command(
+    name = "radisk",
+    about = "Terminal-based radial disk usage visualizer",
+    after_help = "Support this project: https://ko-fi.com/mimobn_"
+)]
 struct Cli {
     /// Path to scan
     #[arg(default_value = ".")]

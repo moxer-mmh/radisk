@@ -386,6 +386,17 @@ fn render_help(f: &mut Frame, app: &App) {
         ]),
         Line::from(""),
         Line::from(Span::styled(
+            "Support",
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(Span::styled(
+            "  Buy me a coffee: ko-fi.com/mimobn_",
+            Style::default().fg(Color::Gray),
+        )),
+        Line::from(""),
+        Line::from(Span::styled(
             "Press any key to close",
             Style::default().fg(Color::Gray),
         )),
