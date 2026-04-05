@@ -26,6 +26,9 @@ RaDisk is a terminal-based disk usage analyzer that visualizes your filesystem a
 
 
 ## Installation
+> [!IMPORTANT]
+> This app has only been tested on Arch Linux.
+> If you are using another distribution, please report any issues you encounter.
 
 The binary name for RaDisk is `radisk`.
 
