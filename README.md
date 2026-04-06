@@ -37,32 +37,7 @@ The binary name for RaDisk is `radisk`.
 ### Arch Linux (AUR)
 
 ```
-$ yay -S radisk-bin
-```
-
-### macOS (Homebrew)
-
-```
-$ brew tap mimobn/radisk
-$ brew install radisk
-```
-
-### Windows (Scoop)
-
-```
-$ scoop install radisk
-```
-
-### Windows (winget)
-
-```
-$ winget install mimobn.radisk
-```
-
-### Nix (NixOS)
-
-```
-$ nix-env --install radisk
+$ yay -S radisk
 ```
 
 ### Rust (crates.io)
