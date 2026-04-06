@@ -40,6 +40,12 @@ The binary name for RaDisk is `radisk`.
 $ yay -S radisk
 ```
 
+### macOS (Homebrew)
+
+```
+$ brew install https://raw.githubusercontent.com/mimobn/radisk/main/homebrew/radisk.rb
+```
+
 ### Rust (crates.io)
 
 ```
