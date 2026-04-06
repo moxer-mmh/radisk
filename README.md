@@ -49,12 +49,6 @@ $ curl -sSf https://raw.githubusercontent.com/mimobn/radisk/main/install.sh | sh
 > [!NOTE]
 > Installs Rust if not already present. Binary is placed in `~/.radisk-install/bin`.
 
-### macOS (Homebrew)
-
-```
-$ brew install https://raw.githubusercontent.com/mimobn/radisk/main/homebrew/radisk.rb
-```
-
 ### Rust (crates.io)
 
 ```
