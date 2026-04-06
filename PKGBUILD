@@ -11,7 +11,7 @@ license=("GPL-3.0-or-later")
 arch=("x86_64")
 makedepends=("cargo")
 depends=("gcc-libs")
-source=("https://github.com/mimobn/radisk/archive/refs/tags/v$pkgver.tar.gz")
+source=("radisk-$pkgver.tar.gz::https://github.com/mimobn/radisk/archive/refs/tags/v$pkgver.tar.gz")
 sha256sums=("SKIP")
 
 build() {
