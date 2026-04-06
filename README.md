@@ -2,7 +2,7 @@
 
 > Terminal-based radial disk usage visualizer inspired by KDE FileLight
 
-[![Build Status](https://github.com/mimobn/radisk/workflows/ci/badge.svg)](https://github.com/mimobn/radisk/actions) [![Crates.io](https://img.shields.io/crates/v/radisk.svg)](https://crates.io/crates/radisk) [![AUR](https://img.shields.io/aur/version/radisk-bin.svg)](https://aur.archlinux.org/packages/radisk-bin) [![License: GPL-3.0](https://img.shields.io/badge/License-GPL%203.0-blue.svg)](LICENSE)
+[![Build Status](https://github.com/mimobn/radisk/workflows/ci/badge.svg)](https://github.com/mimobn/radisk/actions) [![Crates.io](https://img.shields.io/crates/v/radisk.svg)](https://crates.io/crates/radisk) [![AUR](https://img.shields.io/aur/version/radisk-bin.svg)](https://aur.archlinux.org/packages/radisk) [![License: GPL-3.0](https://img.shields.io/badge/License-GPL%203.0-blue.svg)](LICENSE)
 [![Buy me a coffee](https://img.shields.io/badge/☕-Buy%20me%20a%20coffee-FF5E5B?style=for-the-badge)](https://ko-fi.com/mimobn_)
 ## What is RaDisk?
 
