@@ -12,7 +12,7 @@ arch=("x86_64")
 provides=("radisk")
 conflicts=("radisk")
 depends=("gcc-libs")
-source=("https://github.com/mimobn/radisk/releases/download/v$pkgver/radisk-$pkgver-x86_64.tar.gz")
+source=("https://github.com/mimobn/radisk/releases/download/v$pkgver/radisk-$pkgver-$CARCH.tar.gz")
 sha256sums=("82c7962d868ecfc406c7aedd59f8b4814a3567d4a8d6ecad7d2cffc3579ec365")
 
 package() {
