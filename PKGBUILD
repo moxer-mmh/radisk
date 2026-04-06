@@ -12,7 +12,7 @@ arch=("x86_64")
 makedepends=("cargo")
 depends=("gcc-libs")
 source=("radisk-$pkgver.tar.gz::https://github.com/mimobn/radisk/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=("SKIP")
+sha256sums=("3fe978c712f32eb74e7d5f70c1b98c4369e9e0bc55b07e90b21d87bb47e811c2")
 
 build() {
     cd "radisk-$pkgver"
