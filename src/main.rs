@@ -84,6 +84,12 @@ struct Cli {
     #[arg(long, conflicts_with_all = ["export", "import"])]
     mounts: bool,
 
+    /// Generate the radisk(1) man page on stdout and exit.
+    /// Intended for packagers; users get the same content via the
+    /// help screen and `--help`.
+    #[arg(long, hide = true)]
+    gen_man: bool,
+
     /// Optional subcommand. When present, the positional `path` and
     /// the `--export` / `--import` flags are ignored — the
     /// subcommand defines its own inputs.
@@ -132,6 +138,12 @@ impl Drop for TerminalGuard {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
+
+    // --gen-man short-circuits before the terminal is touched, so
+    // packagers can pipe the output to a file in their build script.
+    if cli.gen_man {
+        return run_gen_man();
+    }
 
     // Subcommands fork the entire control flow before we touch the
     // terminal or load the config file.
@@ -261,6 +273,20 @@ fn main() -> Result<()> {
     std::mem::forget(_guard);
 
     result
+}
+
+/// Render the radisk(1) man page from the clap CLI definition and
+/// write it to stdout. Lives in `main` (rather than a build.rs)
+/// because clap_mangen needs the actual `Command` object — moving
+/// it to build-time would require duplicating the Cli struct in a
+/// shared crate, which costs more code than it saves.
+fn run_gen_man() -> Result<()> {
+    use clap::CommandFactory;
+    let cmd = Cli::command();
+    let man = clap_mangen::Man::new(cmd);
+    let mut out = io::stdout().lock();
+    man.render(&mut out).context("failed to render man page")?;
+    Ok(())
 }
 
 /// Dispatch a subcommand. Subcommands never enter the TUI; they're
