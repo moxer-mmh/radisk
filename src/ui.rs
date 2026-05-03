@@ -70,10 +70,11 @@ fn render_viewing(f: &mut Frame, app: &App) {
         .constraints([Constraint::Min(0), Constraint::Length(2)])
         .split(main_chunks[1]);
 
-    // Main view (radial or tree)
+    // Main view (radial / tree / largest-files)
     match app.view {
         crate::views::View::Radial => render_radial_map(f, app, map_chunks[0]),
         crate::views::View::Tree => crate::views::render_tree(f, app, map_chunks[0]),
+        crate::views::View::Largest => crate::views::render_largest(f, app, map_chunks[0]),
     }
 
     // Status bar
@@ -363,7 +364,7 @@ fn render_help(f: &mut Frame, app: &App) {
         ]),
         Line::from(vec![
             Span::styled("  v          ", Style::default().fg(Color::White)),
-            Span::raw("Toggle view (radial / tree)"),
+            Span::raw("Toggle view (radial / tree / largest)"),
         ]),
         Line::from(vec![
             Span::styled("  Shift+S    ", Style::default().fg(Color::White)),
