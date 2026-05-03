@@ -30,6 +30,13 @@ impl Default for ScanConfig {
 }
 
 /// Error type for scanning operations.
+///
+/// Currently emitted only by the legacy synchronous walker
+/// ([`scan_directory`]); the streaming walker reports failures via
+/// [`crate::scanner_streaming::ScanEvent::Warning`] /
+/// [`crate::scanner_streaming::ScanEvent::Failed`] instead. Kept for the
+/// reference walker and so external tooling can match the variant set.
+#[allow(dead_code)]
 #[derive(Debug, thiserror::Error)]
 pub enum ScanError {
     /// An underlying I/O error occurred while reading a directory or file.
@@ -50,6 +57,7 @@ pub struct ScanProgress {
 
 /// Get file size using st_blocks * 512 for accurate disk usage (Linux)
 /// Falls back to file size on non-Linux platforms
+#[allow(dead_code)]
 fn get_file_size(path: &Path) -> u64 {
     #[cfg(unix)]
     {
@@ -74,7 +82,15 @@ fn is_symlink(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
-/// Scan a directory and build a tree
+/// Reference single-threaded recursive walker.
+///
+/// Superseded in production by
+/// [`crate::scanner_streaming::scan_streaming`], which is parallel and
+/// reports progress incrementally. Kept as the simple, easily-auditable
+/// reference implementation and as the trusted oracle for the unit tests in
+/// this module. Still useful as a fallback if jwalk ever needs to be
+/// disabled (e.g. on a platform where rayon is unavailable).
+#[allow(dead_code)]
 pub fn scan_directory(path: &Path, config: &ScanConfig) -> Result<TreeArena, ScanError> {
     let mut arena = TreeArena::new();
     let mut seen_inodes: HashSet<(u64, u64)> = HashSet::new();
@@ -107,6 +123,7 @@ pub fn scan_directory(path: &Path, config: &ScanConfig) -> Result<TreeArena, Sca
     Ok(arena)
 }
 
+#[allow(dead_code)]
 fn scan_recursive(
     arena: &mut TreeArena,
     dir_path: &Path,
@@ -232,201 +249,6 @@ fn scan_recursive(
     }
 
     // Update parent's child count
-    let parent = arena.folder_mut(parent_id);
-    parent.child_count = (parent.children_files.len() + parent.children_folders.len()) as u32;
-
-    Ok(total_size)
-}
-
-/// Scan with progress reporting (background thread)
-pub fn scan_with_progress(
-    path: &Path,
-    config: &ScanConfig,
-    progress_tx: Option<std::sync::mpsc::Sender<ScanProgress>>,
-) -> Result<TreeArena, ScanError> {
-    let mut arena = TreeArena::new();
-    let mut seen_inodes: HashSet<(u64, u64)> = HashSet::new();
-    let mut progress = ScanProgress {
-        files_scanned: 0,
-        total_size: 0,
-    };
-
-    let root_name = path
-        .file_name()
-        .unwrap_or_else(|| std::ffi::OsStr::new("/"))
-        .to_string_lossy()
-        .into_owned();
-
-    let root_folder = Folder {
-        file: File {
-            name: root_name,
-            size: 0,
-            parent: None,
-            path: path.to_path_buf(),
-        },
-        children_files: Vec::new(),
-        children_folders: Vec::new(),
-        child_count: 0,
-    };
-    let root_id = arena.add_folder(root_folder);
-    arena.set_root(root_id);
-
-    let total_size = scan_recursive_with_progress(
-        &mut arena,
-        path,
-        root_id,
-        &mut seen_inodes,
-        config,
-        0,
-        &mut progress,
-        &progress_tx,
-    )?;
-    arena.folder_mut(root_id).file.size = total_size;
-
-    Ok(arena)
-}
-
-// Eight args is unavoidable for now: this is the recursive worker that
-// threads mutable arena state, immutable config, depth bookkeeping, and the
-// progress channel through every level of the tree. Phase 2 replaces this
-// path entirely with the streaming `scanner/walk.rs` walker, at which point
-// the recursive variant is removed.
-#[allow(clippy::too_many_arguments)]
-fn scan_recursive_with_progress(
-    arena: &mut TreeArena,
-    dir_path: &Path,
-    parent_id: FolderId,
-    seen_inodes: &mut HashSet<(u64, u64)>,
-    config: &ScanConfig,
-    depth: usize,
-    progress: &mut ScanProgress,
-    progress_tx: &Option<std::sync::mpsc::Sender<ScanProgress>>,
-) -> Result<u64, ScanError> {
-    let mut total_size: u64 = 0;
-
-    let read_dir = match std::fs::read_dir(dir_path) {
-        Ok(rd) => rd,
-        Err(e) if e.kind() == io::ErrorKind::PermissionDenied => {
-            return Err(ScanError::PermissionDenied(dir_path.to_path_buf()));
-        }
-        Err(e) => return Err(ScanError::IoError(e)),
-    };
-
-    let mut child_items: Vec<(PathBuf, u64, bool)> = Vec::new();
-
-    for entry in read_dir.flatten() {
-        let entry_path = entry.path();
-        let file_type = match entry.file_type() {
-            Ok(ft) => ft,
-            Err(_) => continue,
-        };
-
-        if file_type.is_symlink() && !config.follow_symlinks {
-            continue;
-        }
-
-        if !file_type.is_file() && !file_type.is_dir() {
-            continue;
-        }
-
-        if file_type.is_file() {
-            let size = get_file_size(&entry_path);
-
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::MetadataExt;
-                if let Ok(metadata) = std::fs::metadata(&entry_path) {
-                    let dev = metadata.dev();
-                    let ino = metadata.ino();
-                    if !seen_inodes.insert((dev, ino)) {
-                        continue;
-                    }
-                }
-            }
-
-            child_items.push((entry_path.clone(), size, false));
-            total_size += size;
-
-            progress.files_scanned += 1;
-            progress.total_size += size;
-
-            // Report progress
-            if let Some(tx) = progress_tx {
-                let _ = tx.send(progress.clone());
-            }
-        } else if file_type.is_dir() {
-            if let Some(max) = config.max_depth {
-                if depth >= max {
-                    continue;
-                }
-            }
-            child_items.push((entry_path.clone(), 0, true));
-            progress.files_scanned += 1;
-
-            if let Some(tx) = progress_tx {
-                let _ = tx.send(progress.clone());
-            }
-        }
-    }
-
-    child_items.sort_by_key(|item| std::cmp::Reverse(item.1));
-
-    for (item_path, item_size, is_dir) in child_items {
-        let name = item_path
-            .file_name()
-            .unwrap_or_default()
-            .to_string_lossy()
-            .into_owned();
-
-        if is_dir {
-            let sub_folder = Folder {
-                file: File {
-                    name: name.clone(),
-                    size: 0,
-                    parent: Some(parent_id),
-                    path: item_path.clone(),
-                },
-                children_files: Vec::new(),
-                children_folders: Vec::new(),
-                child_count: 0,
-            };
-            let sub_id = arena.add_folder(sub_folder);
-
-            let parent = arena.folder_mut(parent_id);
-            parent.children_folders.push(sub_id);
-
-            match scan_recursive_with_progress(
-                arena,
-                &item_path,
-                sub_id,
-                seen_inodes,
-                config,
-                depth + 1,
-                progress,
-                progress_tx,
-            ) {
-                Ok(sub_size) => {
-                    let folder = arena.folder_mut(sub_id);
-                    folder.file.size = sub_size;
-                    total_size += sub_size;
-                }
-                Err(ScanError::PermissionDenied(_)) => {}
-                Err(e) => return Err(e),
-            }
-        } else {
-            let file = File {
-                name,
-                size: item_size,
-                parent: Some(parent_id),
-                path: item_path.clone(),
-            };
-            let file_id = arena.add_file(file);
-
-            let parent = arena.folder_mut(parent_id);
-            parent.children_files.push(file_id);
-        }
-    }
-
     let parent = arena.folder_mut(parent_id);
     parent.child_count = (parent.children_files.len() + parent.children_folders.len()) as u32;
 
@@ -664,27 +486,6 @@ mod tests {
             Some(DEFAULT_MAX_DEPTH),
             "default scanner config must cap recursion to prevent stack overflow"
         );
-    }
-
-    #[test]
-    fn test_scan_progress_reporting() {
-        let temp = create_test_fs();
-        let config = ScanConfig::default();
-        let (tx, rx) = std::sync::mpsc::channel();
-
-        let _arena = scan_with_progress(temp.path(), &config, Some(tx)).unwrap();
-
-        // Should have received progress updates
-        let mut updates = Vec::new();
-        while let Ok(progress) = rx.try_recv() {
-            updates.push(progress);
-        }
-
-        assert!(!updates.is_empty());
-        // Final update should show files scanned
-        let final_progress = updates.last().unwrap();
-        assert!(final_progress.files_scanned > 0);
-        assert!(final_progress.total_size > 0);
     }
 
     #[test]

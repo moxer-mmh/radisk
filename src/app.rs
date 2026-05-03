@@ -2,12 +2,11 @@ use crate::color::ColorConfig;
 use crate::context_menu::{ContextMenu, MenuAction};
 use crate::radial::{build_radial_map, RadialConfig, RadialMap, Segment};
 use crate::renderer::{CanvasCoords, RadialRenderer};
-use crate::scanner::{self, ScanConfig, ScanProgress};
+use crate::scanner::{ScanConfig, ScanProgress};
+use crate::scanner_streaming::{scan_streaming, ScanEvent, ScanHandle};
 use crate::tree::{format_size, FolderId, TreeArena, TreeItem};
 use crossterm::event::{KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKind};
 use std::path::PathBuf;
-use std::sync::mpsc;
-use std::thread;
 use uuid::Uuid;
 
 /// Application mode
@@ -51,7 +50,13 @@ pub struct App {
     pub terminal_size: (u16, u16),
     pub should_quit: bool,
     pub scan_progress: Option<ScanProgress>,
-    pub scan_rx: Option<mpsc::Receiver<ScanProgress>>,
+    /// Handle to the active streaming scan, if any. `None` means there is no
+    /// scan in progress (either because we have already moved to `Viewing`
+    /// mode or because no scan has started yet).
+    pub scan_handle: Option<ScanHandle>,
+    /// Path most recently observed by the streaming scan, displayed in the
+    /// status bar so the user can see what the walker is currently chewing.
+    pub scan_current_path: Option<PathBuf>,
     pub nav_history: Vec<PathBuf>,
     pub status_message: String,
     pub canvas_coords: Option<CanvasCoords>,
@@ -81,7 +86,8 @@ impl App {
             terminal_size: (term_width, term_height),
             should_quit: false,
             scan_progress: None,
-            scan_rx: None,
+            scan_handle: None,
+            scan_current_path: None,
             nav_history: Vec::new(),
             status_message: String::new(),
             canvas_coords: None,
@@ -93,78 +99,24 @@ impl App {
         }
     }
 
-    /// Start scanning the current path
+    /// Kick off a streaming parallel scan of `current_path`. The walker runs
+    /// in its own thread and emits [`ScanEvent`]s back through a channel
+    /// owned by `scan_handle`. The UI loop drains the channel via
+    /// [`Self::update_scan_progress`] each frame.
     pub fn start_scan(&mut self) {
-        let path = self.current_path.clone();
-        let (tx, rx) = mpsc::channel();
-
         self.mode = AppMode::Scanning;
-        self.scan_rx = Some(rx);
         self.scan_progress = Some(ScanProgress {
             files_scanned: 0,
             total_size: 0,
         });
+        self.scan_current_path = None;
+        // Drop any prior radial map so the canvas shows "scanning" placeholder
+        // instead of stale data when the user re-scans a different path.
+        self.radial_map = None;
+        self.arena = None;
 
-        // Spawn scan thread
-        thread::spawn(move || {
-            let config = ScanConfig::default();
-            match scanner::scan_with_progress(&path, &config, Some(tx.clone())) {
-                Ok(arena) => {
-                    // Send a final progress tick if the arena has a root.
-                    // An empty / unreachable root yields `None` and we simply
-                    // skip the update — never panic on the worker thread.
-                    if let Some(root_id) = arena.root() {
-                        let _ = tx.send(ScanProgress {
-                            files_scanned: arena.total_file_count(root_id),
-                            total_size: arena.folder(root_id).file.size,
-                        });
-                    }
-                    // Note: the arena itself is rebuilt synchronously below
-                    // (mpsc cannot trivially carry it across threads).
-                }
-                Err(e) => {
-                    // Surface scan errors via the status channel rather than
-                    // stderr so the UI can display them.
-                    let _ = tx.send(ScanProgress {
-                        files_scanned: 0,
-                        total_size: 0,
-                    });
-                    let _ = e; // intentional: keep the error type in scope
-                }
-            }
-        });
-
-        // Also do a synchronous scan for the actual data
-        self.scan_sync();
-    }
-
-    /// Synchronous scan (for actual data)
-    fn scan_sync(&mut self) {
         let config = ScanConfig::default();
-        match scanner::scan_directory(&self.current_path, &config) {
-            Ok(arena) => match arena.root() {
-                Some(root_id) => {
-                    let total_files = arena.total_file_count(root_id);
-                    let total_size = arena.folder(root_id).file.size;
-                    self.arena = Some(arena);
-                    self.mode = AppMode::Viewing;
-                    self.rebuild_map();
-                    self.status_message = format!(
-                        "Scanned {} files ({})",
-                        total_files,
-                        format_size(total_size)
-                    );
-                }
-                None => {
-                    self.status_message = "Scan completed but produced no root entry".to_string();
-                    self.mode = AppMode::Viewing;
-                }
-            },
-            Err(e) => {
-                self.status_message = format!("Error: {}", e);
-                self.mode = AppMode::Viewing;
-            }
-        }
+        self.scan_handle = Some(scan_streaming(&self.current_path, &config));
     }
 
     /// Rebuild the radial map from current state
@@ -951,11 +903,73 @@ impl App {
         Vec::new()
     }
 
-    /// Update scan progress
+    /// Drain pending [`ScanEvent`]s from the streaming scan, if any. Called
+    /// once per frame so the status bar advances and the radial map appears
+    /// the moment the walker finishes.
     pub fn update_scan_progress(&mut self) {
-        if let Some(ref rx) = self.scan_rx {
-            while let Ok(progress) = rx.try_recv() {
-                self.scan_progress = Some(progress);
+        let Some(handle) = self.scan_handle.as_ref() else {
+            return;
+        };
+        // We need to drain events without holding a borrow of `self.scan_handle`
+        // across mutations of other `self.*` fields, so collect first.
+        let events: Vec<ScanEvent> = handle.rx.try_iter().collect();
+        let mut completed = false;
+        for event in events {
+            match event {
+                ScanEvent::Progress {
+                    files,
+                    total_size,
+                    current,
+                } => {
+                    self.scan_progress = Some(ScanProgress {
+                        files_scanned: files,
+                        total_size,
+                    });
+                    self.scan_current_path = current;
+                }
+                ScanEvent::Warning(msg) => {
+                    // Surface the most recent warning in the status bar.
+                    // A future iteration can keep a bounded ring buffer for
+                    // a "warnings" overlay — this single-line view is fine
+                    // for v1.
+                    self.status_message = format!("warn: {}", msg);
+                }
+                ScanEvent::Complete(arena) => {
+                    self.install_completed_arena(*arena);
+                    completed = true;
+                }
+                ScanEvent::Failed(reason) => {
+                    self.status_message = format!("Scan failed: {}", reason);
+                    self.mode = AppMode::Viewing;
+                    completed = true;
+                }
+            }
+        }
+        if completed {
+            // Drop the handle; its `Drop` impl joins the worker thread.
+            self.scan_handle = None;
+            self.scan_current_path = None;
+        }
+    }
+
+    /// Install a completed arena into the App state and switch to viewing.
+    fn install_completed_arena(&mut self, arena: TreeArena) {
+        match arena.root() {
+            Some(root_id) => {
+                let total_files = arena.total_file_count(root_id);
+                let total_size = arena.folder(root_id).file.size;
+                self.arena = Some(arena);
+                self.mode = AppMode::Viewing;
+                self.rebuild_map();
+                self.status_message = format!(
+                    "Scanned {} files ({})",
+                    total_files,
+                    format_size(total_size)
+                );
+            }
+            None => {
+                self.status_message = "Scan completed but produced no root entry".to_string();
+                self.mode = AppMode::Viewing;
             }
         }
     }
@@ -964,7 +978,7 @@ impl App {
     pub fn status_text(&self) -> String {
         match self.mode {
             AppMode::Scanning => {
-                if let Some(ref progress) = self.scan_progress {
+                let header = if let Some(ref progress) = self.scan_progress {
                     format!(
                         "Scanning... {} files ({})",
                         progress.files_scanned,
@@ -972,6 +986,28 @@ impl App {
                     )
                 } else {
                     "Scanning...".to_string()
+                };
+                // Append the most recent path so the user can see what the
+                // walker is on, truncated to a sensible width.
+                match &self.scan_current_path {
+                    Some(path) => {
+                        let display = path.display().to_string();
+                        let truncated: String = if display.chars().count() > 60 {
+                            let tail: String = display
+                                .chars()
+                                .rev()
+                                .take(57)
+                                .collect::<Vec<_>>()
+                                .into_iter()
+                                .rev()
+                                .collect();
+                            format!("...{}", tail)
+                        } else {
+                            display
+                        };
+                        format!("{}  {}", header, truncated)
+                    }
+                    None => header,
                 }
             }
             AppMode::Viewing => {
