@@ -1260,6 +1260,7 @@ dependencies = [
  "clap",
  "crossterm",
  "directories",
+ "globset",
  "jwalk",
  "palette",
  "ratatui",
