@@ -129,6 +129,18 @@ context_menu.rs is a small leaf consumed by app.rs.
   recoverable error rather than panicking.
 - **Inode dedup is best-effort**: hard-link files are counted once per
   `(dev, ino)` pair on Unix; on other platforms duplicates are counted.
+- **Sort ordering** is decoupled from the arena: `TreeArena::folder_items`
+  always returns size-descending (preserving the radial layout's
+  contract), while `TreeArena::folder_items_sorted(_, mode)` honours
+  the user's `SortMode`. The sidebar and tree view route through the
+  latter via `App::sidebar_items`.
+- **Size accounting** is determined by `ScanConfig::use_apparent_size`
+  at scan time. Toggling this in-app re-runs the streaming walker
+  because every node's stored size changes.
+- **Excludes** are applied entry-by-entry in the streaming walker
+  against both the full path and the base name. Patterns that fail to
+  parse become `ScanEvent::Warning` and the rest of the matcher is
+  built without them.
 
 ---
 

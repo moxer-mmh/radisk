@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (Phase 5 — ncdu-parity features)
+- **Sort modes**: cycle the sidebar / tree-view ordering with the
+  `cycle_sort` action (default chord: `Shift+S`). Available modes:
+  size descending (default), size ascending, name (case-insensitive
+  ASCII alphabetical). The radial layout always remains size-driven.
+  - New `SortMode` enum + `TreeArena::folder_items_sorted` extends
+    the existing `folder_items` API without breaking callers.
+  - `App.sort_mode` is updated by the action; the status bar shows
+    the current label after each cycle.
+- **Apparent vs on-disk size toggle**: `toggle_apparent_size` action
+  (default chord: `a`, matching ncdu) flips between `metadata.len()`
+  ("apparent" — what `ls -l` shows) and `st_blocks * 512` ("on-disk"
+  — what `du` shows). Re-runs the streaming scan automatically; the
+  status bar reflects the new mode while the rescan is in progress.
+- **Exclude patterns** (gitignore-style globs):
+  - New `--exclude PATTERN` CLI flag (repeatable). Adds to, never
+    replaces, `[scan].exclude` in the config file.
+  - Patterns are matched against both the full path and the base
+    name, so `--exclude node_modules` and `--exclude '**/target/**'`
+    both work.
+  - Invalid patterns produce a `ScanEvent::Warning` and the rest of
+    the patterns continue to apply — a single bad glob never aborts
+    a scan.
+  - Built on `globset` (a sub-crate of ripgrep's `ignore`) — fast
+    enough to run in the per-entry hot path.
+- `[scan].use_apparent_size` and `[scan].exclude` config keys join
+  the existing `follow_symlinks` / `max_depth` so both can be
+  persisted in the user's TOML file.
+- `docs/config.example.toml` documents the new sections, the two
+  new actions, and the chord defaults.
+
 ### Added (Phase 4 — tree view)
 - New **tree view** alt mode: ncdu-style indented list of the focused
   folder's children with a proportional size bar, percentage of the

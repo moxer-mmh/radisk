@@ -34,6 +34,23 @@ follow_symlinks = false
 # Lower it if you only want to look at the top few levels of a tree.
 max_depth = 4096
 
+# Use apparent file size (`metadata.len()`, what `ls -l` shows) instead
+# of on-disk size (`st_blocks * 512`, what `du` shows). The two diverge
+# for sparse files, transparently-compressed filesystems, and CoW
+# snapshots. Toggleable in-app with the `toggle_apparent_size` action
+# (default chord: `a`).
+use_apparent_size = false
+
+# Glob patterns to skip during the walk. Matched against the full path
+# and the base name, so `node_modules` and `**/target/**` both work.
+# Bad patterns are reported as warnings and ignored; they never abort
+# a scan. Repeatable on the command line via `--exclude PATTERN`.
+# exclude = [
+#     "node_modules",
+#     ".git",
+#     "**/target/**",
+# ]
+
 
 # ─── Keybinds ───────────────────────────────────────────────────────────
 # Each entry rebinds an action to a single chord. Specifying an action
@@ -55,20 +72,22 @@ max_depth = 4096
 #   quit, help, navigate_up, navigate_into,
 #   zoom_in, zoom_out, rescan, delete,
 #   toggle_focus, move_up, move_down,
-#   toggle_view
+#   toggle_view, cycle_sort, toggle_apparent_size
 [keybinds]
-# quit          = "ctrl+q"
-# help          = "?"
-# navigate_up   = "u"
-# navigate_into = "enter"
-# zoom_in       = "+"
-# zoom_out      = "-"
-# rescan        = "r"
-# delete        = "d"
-# toggle_focus  = "tab"
-# move_up       = "k"
-# move_down     = "j"
-# toggle_view   = "v"   # cycle radial / tree
+# quit                 = "ctrl+q"
+# help                 = "?"
+# navigate_up          = "u"
+# navigate_into        = "enter"
+# zoom_in              = "+"
+# zoom_out             = "-"
+# rescan               = "r"
+# delete               = "d"
+# toggle_focus         = "tab"
+# move_up              = "k"
+# move_down            = "j"
+# toggle_view          = "v"          # cycle radial / tree
+# cycle_sort           = "shift+s"    # size↓ → size↑ → name → size↓
+# toggle_apparent_size = "a"          # apparent ↔ on-disk (rescans)
 
 
 # ─── Colors ─────────────────────────────────────────────────────────────
