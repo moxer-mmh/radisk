@@ -149,6 +149,13 @@ struct WalkerShared {
     cancel: Arc<AtomicBool>,
     config: ScanConfig,
     exclude: Option<GlobSet>,
+    /// Pseudo-FS mount points (`/proc`, `/sys`, `/dev`, …) the
+    /// walker refuses to descend into. Populated once at spawn
+    /// from [`crate::mounts::pseudo_mount_points`]. Without this,
+    /// scanning `/` reports `/proc/kcore` as ~128 TB because
+    /// kcore is the kernel's virtual memory image, not real
+    /// storage.
+    pseudo_mounts: HashSet<PathBuf>,
 }
 
 /// Public handle the App holds onto. Exposes `set_focus` for
@@ -311,6 +318,8 @@ pub fn spawn_walker(
         dir: initial,
     });
 
+    let pseudo_mounts = crate::mounts::pseudo_mount_points();
+
     let shared = Arc::new(WalkerShared {
         arena,
         state: Mutex::new(WalkerState {
@@ -328,6 +337,7 @@ pub fn spawn_walker(
         cancel,
         config,
         exclude,
+        pseudo_mounts,
     });
 
     // Default to one worker per logical CPU, matching what jwalk's
@@ -456,6 +466,13 @@ fn process_dir(shared: &WalkerShared, pending: &PendingDir, tx: &Sender<ScanEven
         }
 
         if ft.is_dir() {
+            // Skip pseudo-filesystem mount points entirely. The
+            // arena gets no entry for `/proc`, `/sys`, etc., so
+            // synthetic files like `/proc/kcore` (which the
+            // kernel reports as 128 TB) can't pollute the totals.
+            if shared.pseudo_mounts.contains(&path) {
+                continue;
+            }
             sub_dirs.push(DirEntry { path, name });
         } else {
             let size = size_from_metadata(&metadata, shared.config.use_apparent_size);
