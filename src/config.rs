@@ -58,6 +58,12 @@ pub struct ScanConfigOverrides {
     /// Hard recursion ceiling. `None` is rejected at load time and folded
     /// into the compile-time [`crate::scanner::DEFAULT_MAX_DEPTH`].
     pub max_depth: usize,
+    /// Use apparent file size (`metadata.len()`) instead of on-disk
+    /// size (`st_blocks * 512`). Toggleable in-app with the
+    /// `toggle_apparent_size` action.
+    pub use_apparent_size: bool,
+    /// Glob patterns whose matches are skipped during the walk.
+    pub exclude: Vec<String>,
 }
 
 /// Keybind configuration.
@@ -101,6 +107,8 @@ impl Default for ScanConfigOverrides {
         Self {
             follow_symlinks: false,
             max_depth: crate::scanner::DEFAULT_MAX_DEPTH,
+            use_apparent_size: false,
+            exclude: Vec::new(),
         }
     }
 }
@@ -129,6 +137,8 @@ struct PartialDisplay {
 struct PartialScan {
     follow_symlinks: Option<bool>,
     max_depth: Option<usize>,
+    use_apparent_size: Option<bool>,
+    exclude: Option<Vec<String>>,
 }
 
 impl PartialConfig {
@@ -145,6 +155,12 @@ impl PartialConfig {
         }
         if let Some(v) = self.scan.max_depth {
             cfg.scan.max_depth = v.max(1);
+        }
+        if let Some(v) = self.scan.use_apparent_size {
+            cfg.scan.use_apparent_size = v;
+        }
+        if let Some(v) = self.scan.exclude {
+            cfg.scan.exclude = v;
         }
         cfg.keybinds.overrides = self.keybinds;
         cfg.colors.overrides = self.colors;
@@ -195,6 +211,8 @@ impl Config {
         crate::scanner::ScanConfig {
             follow_symlinks: self.scan.follow_symlinks,
             max_depth: Some(self.scan.max_depth),
+            use_apparent_size: self.scan.use_apparent_size,
+            exclude: self.scan.exclude.clone(),
         }
     }
 }
