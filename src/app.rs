@@ -55,6 +55,11 @@ pub struct App {
     /// Resolved colour palette for UI chrome. Built once from
     /// `config.colors`; passed by reference to renderers.
     pub theme: Theme,
+    /// Multi-select set keyed by absolute path. Used by the batch
+    /// delete flow (`delete_selected` action) so a user can
+    /// space-mark several entries from the sidebar and delete them
+    /// in one confirmation dialog.
+    pub selected_paths: std::collections::HashSet<PathBuf>,
     /// Currently active main-area view (radial, tree, …). Toggled by
     /// the `toggle_view` action.
     pub view: View,
@@ -132,6 +137,7 @@ impl App {
             config,
             keybinds,
             theme,
+            selected_paths: std::collections::HashSet::new(),
             view: View::default(),
             sort_mode: SortMode::default(),
             delete_strategy: DeleteStrategy::detect(),
@@ -295,7 +301,63 @@ impl App {
                 // Re-walk: the size accounting changed at every node.
                 self.start_scan();
             }
+            Action::ToggleSelect => self.toggle_select_current(),
+            Action::DeleteSelected => self.trigger_delete_selected(),
+            Action::ClearSelection => {
+                let n = self.selected_paths.len();
+                self.selected_paths.clear();
+                self.status_message = format!("Cleared {} selection(s)", n);
+            }
         }
+    }
+
+    /// Toggle the current sidebar item in/out of `selected_paths`.
+    /// No-op if the sidebar is empty or the arena hasn't loaded yet.
+    fn toggle_select_current(&mut self) {
+        let Some(arena) = self.arena.as_ref() else {
+            return;
+        };
+        let items = self.sidebar_items();
+        let Some(item) = items.get(self.sidebar_index) else {
+            return;
+        };
+        let path = match item {
+            TreeItem::File(id, _) => arena.file(*id).path.clone(),
+            TreeItem::Folder(id, _) => arena.folder(*id).file.path.clone(),
+        };
+        if self.selected_paths.remove(&path) {
+            self.status_message = format!(
+                "- {}  ({} selected)",
+                path.display(),
+                self.selected_paths.len()
+            );
+        } else {
+            self.selected_paths.insert(path.clone());
+            self.status_message = format!(
+                "+ {}  ({} selected)",
+                path.display(),
+                self.selected_paths.len()
+            );
+        }
+    }
+
+    /// Open the confirmation dialog for the multi-select batch.
+    /// Reuses the existing `ConfirmDelete` mode; the executor in
+    /// `execute_delete` walks `selected_paths` instead of the
+    /// single `delete_path` when the set is non-empty.
+    fn trigger_delete_selected(&mut self) {
+        if self.selected_paths.is_empty() {
+            self.status_message = "no items selected (space to mark, then Shift+D)".into();
+            return;
+        }
+        // Stage with a sentinel path so the existing dialog still
+        // has something to display; the actual targets come from
+        // `selected_paths`.
+        self.delete_path = None;
+        self.delete_inode = None;
+        self.delete_is_folder = false;
+        self.delete_selected = false;
+        self.mode = AppMode::ConfirmDelete;
     }
 
     /// Trigger delete action for the currently selected item
@@ -915,6 +977,40 @@ impl App {
     /// [`DeleteStrategy`]. Status message reflects whether the entry
     /// was trashed (recoverable) or permanently removed.
     fn execute_delete(&mut self) {
+        // Multi-select batch wins over single-target if non-empty.
+        if !self.selected_paths.is_empty() {
+            let total = self.selected_paths.len();
+            let paths: Vec<PathBuf> = self.selected_paths.drain().collect();
+            let mut ok = 0usize;
+            let mut errors: Vec<String> = Vec::new();
+            for p in &paths {
+                // No inode TOCTOU guard for batch deletes — we
+                // currently capture inodes for files only and
+                // batches may include folders. The contextful
+                // error from `delete()` still surfaces failures.
+                match delete_path(&self.delete_strategy, p, None) {
+                    Ok(()) => ok += 1,
+                    Err(e) => errors.push(format!("{}: {:#}", p.display(), e)),
+                }
+            }
+            self.status_message = if errors.is_empty() {
+                format!("Deleted {} via {}", ok, self.delete_strategy.label())
+            } else {
+                format!(
+                    "Deleted {}/{}, {} failed: {}",
+                    ok,
+                    total,
+                    errors.len(),
+                    errors.first().map(String::as_str).unwrap_or("")
+                )
+            };
+            self.delete_path = None;
+            self.delete_inode = None;
+            self.mode = AppMode::Viewing;
+            self.start_scan();
+            return;
+        }
+
         if let Some(path) = self.delete_path.take() {
             let expected_inode = self.delete_inode.take();
             match delete_path(&self.delete_strategy, &path, expected_inode) {

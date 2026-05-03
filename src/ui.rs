@@ -136,7 +136,22 @@ fn render_sidebar(f: &mut Frame, app: &App, area: Rect) {
                     ("[D]", name, format_size(*s), style)
                 }
             };
-            let content = format!("{} {} ({})", icon, name, size_str);
+            // Mark rows that are part of the multi-select set with
+            // a leading checkmark so users can see which entries
+            // would be hit by the next Shift+D.
+            let mark = {
+                let path = match item {
+                    TreeItem::File(id, _) => app.arena.as_ref().map(|a| a.file(*id).path.clone()),
+                    TreeItem::Folder(id, _) => {
+                        app.arena.as_ref().map(|a| a.folder(*id).file.path.clone())
+                    }
+                };
+                match path {
+                    Some(p) if app.selected_paths.contains(&p) => "✓",
+                    _ => " ",
+                }
+            };
+            let content = format!("{}{} {} ({})", mark, icon, name, size_str);
             ListItem::new(content).style(style)
         })
         .collect();

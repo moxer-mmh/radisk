@@ -49,6 +49,14 @@ pub enum Action {
     /// Toggle between apparent file size (`metadata.len()`) and
     /// on-disk size (`st_blocks * 512` on Unix). Triggers a rescan.
     ToggleApparentSize,
+    /// Toggle the current sidebar item in/out of the multi-select
+    /// set used by [`Action::DeleteSelected`].
+    ToggleSelect,
+    /// Open the delete confirmation dialog for every item currently
+    /// in the multi-select set.
+    DeleteSelected,
+    /// Clear every entry from the multi-select set.
+    ClearSelection,
 }
 
 impl Action {
@@ -70,6 +78,9 @@ impl Action {
             Action::ToggleView => "toggle_view",
             Action::CycleSort => "cycle_sort",
             Action::ToggleApparentSize => "toggle_apparent_size",
+            Action::ToggleSelect => "toggle_select",
+            Action::DeleteSelected => "delete_selected",
+            Action::ClearSelection => "clear_selection",
         }
     }
 
@@ -89,6 +100,9 @@ impl Action {
             "toggle_view" => Some(Action::ToggleView),
             "cycle_sort" => Some(Action::CycleSort),
             "toggle_apparent_size" => Some(Action::ToggleApparentSize),
+            "toggle_select" => Some(Action::ToggleSelect),
+            "delete_selected" => Some(Action::DeleteSelected),
+            "clear_selection" => Some(Action::ClearSelection),
             _ => None,
         }
     }
@@ -111,6 +125,9 @@ impl Action {
             Action::ToggleView,
             Action::CycleSort,
             Action::ToggleApparentSize,
+            Action::ToggleSelect,
+            Action::DeleteSelected,
+            Action::ClearSelection,
         ]
     }
 }
@@ -268,6 +285,21 @@ impl Keybinds {
             KeyCode::Char('a'),
             KeyModifiers::NONE,
             Action::ToggleApparentSize,
+        );
+
+        // Multi-select chords. Space toggles selection of the current
+        // sidebar item; capital D triggers the batch delete; capital
+        // X clears every selection.
+        add(KeyCode::Char(' '), KeyModifiers::NONE, Action::ToggleSelect);
+        add(
+            KeyCode::Char('D'),
+            KeyModifiers::SHIFT,
+            Action::DeleteSelected,
+        );
+        add(
+            KeyCode::Char('X'),
+            KeyModifiers::SHIFT,
+            Action::ClearSelection,
         );
 
         Self { map }
