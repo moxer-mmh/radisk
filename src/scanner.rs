@@ -3,10 +3,20 @@ use std::collections::HashSet;
 use std::io;
 use std::path::{Path, PathBuf};
 
-/// Configuration for the disk scanner
+/// Hard ceiling on directory recursion to keep the walker's stack bounded on
+/// pathological filesystems (e.g. cycles produced by bind-mounts or very deep
+/// node_modules trees). 4096 is well beyond any practical disk layout while
+/// still leaving plenty of stack headroom for a release build.
+pub const DEFAULT_MAX_DEPTH: usize = 4096;
+
+/// Configuration for the disk scanner.
 #[derive(Debug, Clone)]
 pub struct ScanConfig {
+    /// If `true` the walker descends into symlinked directories; otherwise
+    /// symlinks are skipped (which matches `du` and `ncdu` defaults).
     pub follow_symlinks: bool,
+    /// Maximum recursion depth, counting from the scan root as 0. Defaults to
+    /// [`DEFAULT_MAX_DEPTH`] to bound stack usage.
     pub max_depth: Option<usize>,
 }
 
@@ -14,28 +24,22 @@ impl Default for ScanConfig {
     fn default() -> Self {
         Self {
             follow_symlinks: false,
-            max_depth: None,
+            max_depth: Some(DEFAULT_MAX_DEPTH),
         }
     }
 }
 
-/// Error type for scanning operations
-#[derive(Debug)]
+/// Error type for scanning operations.
+#[derive(Debug, thiserror::Error)]
 pub enum ScanError {
-    IoError(io::Error),
+    /// An underlying I/O error occurred while reading a directory or file.
+    #[error("I/O error: {0}")]
+    IoError(#[from] io::Error),
+    /// The walker could not read a directory because of insufficient
+    /// permissions. Sub-tree size is reported as 0 and traversal continues.
+    #[error("permission denied: {0}")]
     PermissionDenied(PathBuf),
 }
-
-impl std::fmt::Display for ScanError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ScanError::IoError(e) => write!(f, "IO error: {}", e),
-            ScanError::PermissionDenied(p) => write!(f, "Permission denied: {}", p.display()),
-        }
-    }
-}
-
-impl std::error::Error for ScanError {}
 
 /// Progress information during scanning
 #[derive(Debug, Clone)]
@@ -54,7 +58,7 @@ fn get_file_size(path: &Path) -> u64 {
             // Use st_blocks * 512 for actual disk usage (matches FileLight)
             let blocks = metadata.blocks();
             if blocks > 0 {
-                return blocks as u64 * 512;
+                return blocks * 512;
             }
         }
     }
@@ -171,7 +175,7 @@ fn scan_recursive(
     }
 
     // Sort by size descending (largest first, as FileLight does)
-    child_items.sort_by(|a, b| b.1.cmp(&a.1));
+    child_items.sort_by_key(|item| std::cmp::Reverse(item.1));
 
     for (item_path, item_size, is_dir) in child_items {
         let name = item_path
@@ -282,6 +286,12 @@ pub fn scan_with_progress(
     Ok(arena)
 }
 
+// Eight args is unavoidable for now: this is the recursive worker that
+// threads mutable arena state, immutable config, depth bookkeeping, and the
+// progress channel through every level of the tree. Phase 2 replaces this
+// path entirely with the streaming `scanner/walk.rs` walker, at which point
+// the recursive variant is removed.
+#[allow(clippy::too_many_arguments)]
 fn scan_recursive_with_progress(
     arena: &mut TreeArena,
     dir_path: &Path,
@@ -359,7 +369,7 @@ fn scan_recursive_with_progress(
         }
     }
 
-    child_items.sort_by(|a, b| b.1.cmp(&a.1));
+    child_items.sort_by_key(|item| std::cmp::Reverse(item.1));
 
     for (item_path, item_size, is_dir) in child_items {
         let name = item_path
@@ -506,7 +516,7 @@ mod tests {
             .unwrap();
 
         let dir2 = arena.folder(dir2_id);
-        assert!(dir2.children_folders.len() >= 1);
+        assert!(!dir2.children_folders.is_empty());
     }
 
     #[test]
@@ -558,6 +568,7 @@ mod tests {
     fn test_scan_permission_denied() {
         let temp = TempDir::new().unwrap();
         temp.child("restricted").create_dir_all().unwrap();
+        temp.child("readable/data.txt").write_str("hello").unwrap();
 
         #[cfg(unix)]
         {
@@ -569,10 +580,90 @@ mod tests {
             .unwrap();
 
             let config = ScanConfig::default();
-            // Should not panic - restricted dir gets skipped
             let result = scan_directory(temp.path(), &config);
-            assert!(result.is_ok());
+
+            // Restore permissions before any assertion fails so the temp dir
+            // can be cleaned up cleanly even on failure.
+            let _ = std::fs::set_permissions(
+                temp.child("restricted").path(),
+                std::fs::Permissions::from_mode(0o755),
+            );
+
+            // Scanner must not abort on a permission-denied subdir.
+            let arena = result.expect("scan should succeed despite restricted subdir");
+            let root_id = arena.root().expect("root should exist");
+
+            // Walk the tree and assert: the readable branch is present with
+            // a positive size; the restricted branch is present with size 0.
+            let mut saw_readable = false;
+            let mut saw_restricted_zero = false;
+            for folder_id in arena.folder(root_id).children_folders.clone() {
+                let folder = arena.folder(folder_id);
+                match folder.file.name.as_str() {
+                    "readable" => {
+                        saw_readable = true;
+                        assert!(folder.file.size > 0, "readable branch should have files");
+                    }
+                    "restricted" => {
+                        saw_restricted_zero = true;
+                        assert_eq!(
+                            folder.file.size, 0,
+                            "restricted branch should report size 0"
+                        );
+                    }
+                    _ => {}
+                }
+            }
+            assert!(saw_readable, "readable subdir was not recorded");
+            assert!(saw_restricted_zero, "restricted subdir was not recorded");
         }
+    }
+
+    #[test]
+    fn test_scan_respects_max_depth() {
+        let temp = TempDir::new().unwrap();
+        // Build /a/b/c/d.txt — three directories deep.
+        temp.child("a/b/c").create_dir_all().unwrap();
+        temp.child("a/b/c/d.txt").write_str("deep").unwrap();
+
+        // Cap depth at 1 so only `a/` should be visited; `b/` is at depth 1
+        // and should appear as an empty folder, while `c/` and `d.txt` must
+        // not be recorded.
+        let config = ScanConfig {
+            follow_symlinks: false,
+            max_depth: Some(1),
+        };
+        let arena = scan_directory(temp.path(), &config).unwrap();
+        let root_id = arena.root().unwrap();
+
+        // Find folder `a`.
+        let a_id = arena
+            .folder(root_id)
+            .children_folders
+            .iter()
+            .copied()
+            .find(|id| arena.folder(*id).file.name == "a")
+            .expect("expected folder a");
+
+        // `a` should have no recorded child folders or files because the
+        // walker stopped descending past depth 1.
+        let a = arena.folder(a_id);
+        assert!(
+            a.children_folders.is_empty() && a.children_files.is_empty(),
+            "a should be empty when max_depth=1, got {} folders + {} files",
+            a.children_folders.len(),
+            a.children_files.len()
+        );
+    }
+
+    #[test]
+    fn test_default_max_depth_is_bounded() {
+        let config = ScanConfig::default();
+        assert_eq!(
+            config.max_depth,
+            Some(DEFAULT_MAX_DEPTH),
+            "default scanner config must cap recursion to prevent stack overflow"
+        );
     }
 
     #[test]

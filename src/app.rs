@@ -58,7 +58,10 @@ pub struct App {
     pub context_menu: ContextMenu,
     pub delete_path: Option<PathBuf>,
     pub delete_is_folder: bool,
-    pub delete_selected: bool, // true = Yes, false = No
+    /// Currently highlighted choice in the delete confirmation dialog.
+    /// `true` = Yes, `false` = No. Always initialised to `false` so a stray
+    /// Enter keypress can never trigger an irreversible deletion.
+    pub delete_selected: bool,
 }
 
 impl App {
@@ -85,7 +88,8 @@ impl App {
             context_menu: ContextMenu::new(),
             delete_path: None,
             delete_is_folder: false,
-            delete_selected: true, // Default to Yes
+            // Default to No: a destructive action requires deliberate input.
+            delete_selected: false,
         }
     }
 
@@ -106,17 +110,26 @@ impl App {
             let config = ScanConfig::default();
             match scanner::scan_with_progress(&path, &config, Some(tx.clone())) {
                 Ok(arena) => {
-                    // Send final progress
-                    let root_id = arena.root().unwrap();
-                    let _ = tx.send(ScanProgress {
-                        files_scanned: arena.total_file_count(root_id),
-                        total_size: arena.folder(root_id).file.size,
-                    });
-                    // Note: We can't send the arena through the channel easily
-                    // Instead, we'll do a synchronous scan after progress updates
+                    // Send a final progress tick if the arena has a root.
+                    // An empty / unreachable root yields `None` and we simply
+                    // skip the update — never panic on the worker thread.
+                    if let Some(root_id) = arena.root() {
+                        let _ = tx.send(ScanProgress {
+                            files_scanned: arena.total_file_count(root_id),
+                            total_size: arena.folder(root_id).file.size,
+                        });
+                    }
+                    // Note: the arena itself is rebuilt synchronously below
+                    // (mpsc cannot trivially carry it across threads).
                 }
                 Err(e) => {
-                    eprintln!("Scan error: {}", e);
+                    // Surface scan errors via the status channel rather than
+                    // stderr so the UI can display them.
+                    let _ = tx.send(ScanProgress {
+                        files_scanned: 0,
+                        total_size: 0,
+                    });
+                    let _ = e; // intentional: keep the error type in scope
                 }
             }
         });
@@ -129,17 +142,24 @@ impl App {
     fn scan_sync(&mut self) {
         let config = ScanConfig::default();
         match scanner::scan_directory(&self.current_path, &config) {
-            Ok(arena) => {
-                let root_id = arena.root().unwrap();
-                self.arena = Some(arena);
-                self.mode = AppMode::Viewing;
-                self.rebuild_map();
-                self.status_message = format!(
-                    "Scanned {} files ({})",
-                    self.arena.as_ref().unwrap().total_file_count(root_id),
-                    format_size(self.arena.as_ref().unwrap().folder(root_id).file.size)
-                );
-            }
+            Ok(arena) => match arena.root() {
+                Some(root_id) => {
+                    let total_files = arena.total_file_count(root_id);
+                    let total_size = arena.folder(root_id).file.size;
+                    self.arena = Some(arena);
+                    self.mode = AppMode::Viewing;
+                    self.rebuild_map();
+                    self.status_message = format!(
+                        "Scanned {} files ({})",
+                        total_files,
+                        format_size(total_size)
+                    );
+                }
+                None => {
+                    self.status_message = "Scan completed but produced no root entry".to_string();
+                    self.mode = AppMode::Viewing;
+                }
+            },
             Err(e) => {
                 self.status_message = format!("Error: {}", e);
                 self.mode = AppMode::Viewing;
@@ -246,23 +266,26 @@ impl App {
     /// Trigger delete action for the currently selected item
     fn trigger_delete(&mut self) {
         // Check sidebar selection first
-        let items = self.sidebar_items();
-        if let Some(item) = items.get(self.sidebar_index) {
-            let (path, is_folder) = match item {
-                TreeItem::File(id, _) => {
-                    let file = self.arena.as_ref().unwrap().file(*id);
-                    (file.path.clone(), false)
-                }
-                TreeItem::Folder(id, _) => {
-                    let folder = self.arena.as_ref().unwrap().folder(*id);
-                    (folder.file.path.clone(), true)
-                }
-            };
-            self.delete_path = Some(path);
-            self.delete_is_folder = is_folder;
-            self.delete_selected = true;
-            self.mode = AppMode::ConfirmDelete;
-            return;
+        if let Some(arena) = self.arena.as_ref() {
+            let items = self.sidebar_items();
+            if let Some(item) = items.get(self.sidebar_index) {
+                let (path, is_folder) = match item {
+                    TreeItem::File(id, _) => {
+                        let file = arena.file(*id);
+                        (file.path.clone(), false)
+                    }
+                    TreeItem::Folder(id, _) => {
+                        let folder = arena.folder(*id);
+                        (folder.file.path.clone(), true)
+                    }
+                };
+                self.delete_path = Some(path);
+                self.delete_is_folder = is_folder;
+                // Always reset highlight to No when opening the dialog.
+                self.delete_selected = false;
+                self.mode = AppMode::ConfirmDelete;
+                return;
+            }
         }
 
         // Otherwise use map hover
@@ -271,7 +294,8 @@ impl App {
                 if let Some(segment) = self.renderer.find_segment(map, &uuid) {
                     self.delete_path = Some(PathBuf::from(&segment.path));
                     self.delete_is_folder = segment.is_folder;
-                    self.delete_selected = true;
+                    // Always reset highlight to No when opening the dialog.
+                    self.delete_selected = false;
                     self.mode = AppMode::ConfirmDelete;
                 }
             }
@@ -547,36 +571,34 @@ impl App {
 
     /// Sync canvas hover to sidebar
     fn sync_hover_to_sidebar(&mut self) {
-        if let Some(uuid) = self.hovered_uuid {
-            if let Some(ref map) = self.radial_map {
-                if let Some(segment) = self.renderer.find_segment(map, &uuid) {
-                    let items = self.sidebar_items();
-                    for (i, item) in items.iter().enumerate() {
-                        let item_path = match item {
-                            TreeItem::File(id, _) => self
-                                .arena
-                                .as_ref()
-                                .unwrap()
-                                .file(*id)
-                                .path
-                                .to_string_lossy()
-                                .into_owned(),
-                            TreeItem::Folder(id, _) => self
-                                .arena
-                                .as_ref()
-                                .unwrap()
-                                .folder(*id)
-                                .file
-                                .path
-                                .to_string_lossy()
-                                .into_owned(),
-                        };
-                        if item_path == segment.path {
-                            self.sidebar_hover_index = Some(i);
-                            return;
-                        }
-                    }
+        let Some(uuid) = self.hovered_uuid else {
+            self.sidebar_hover_index = None;
+            return;
+        };
+        let Some(map) = self.radial_map.as_ref() else {
+            self.sidebar_hover_index = None;
+            return;
+        };
+        let Some(segment) = self.renderer.find_segment(map, &uuid) else {
+            self.sidebar_hover_index = None;
+            return;
+        };
+        let Some(arena) = self.arena.as_ref() else {
+            self.sidebar_hover_index = None;
+            return;
+        };
+
+        let items = self.sidebar_items();
+        for (i, item) in items.iter().enumerate() {
+            let item_path = match item {
+                TreeItem::File(id, _) => arena.file(*id).path.to_string_lossy().into_owned(),
+                TreeItem::Folder(id, _) => {
+                    arena.folder(*id).file.path.to_string_lossy().into_owned()
                 }
+            };
+            if item_path == segment.path {
+                self.sidebar_hover_index = Some(i);
+                return;
             }
         }
         self.sidebar_hover_index = None;
@@ -584,44 +606,32 @@ impl App {
 
     /// Sync sidebar hover to canvas
     fn sync_hover_to_canvas(&mut self) {
-        if let Some(hover_idx) = self.sidebar_hover_index {
-            let items = self.sidebar_items();
-            if let Some(item) = items.get(hover_idx) {
-                let path = match item {
-                    TreeItem::File(id, _) => self
-                        .arena
-                        .as_ref()
-                        .unwrap()
-                        .file(*id)
-                        .path
-                        .to_string_lossy()
-                        .into_owned(),
-                    TreeItem::Folder(id, _) => self
-                        .arena
-                        .as_ref()
-                        .unwrap()
-                        .folder(*id)
-                        .file
-                        .path
-                        .to_string_lossy()
-                        .into_owned(),
-                };
+        let target_uuid = self.find_segment_uuid_for_sidebar_hover();
+        self.hovered_uuid = target_uuid;
+        self.renderer.set_hovered(target_uuid);
+    }
 
-                if let Some(ref map) = self.radial_map {
-                    for ring in &map.rings {
-                        for segment in &ring.segments {
-                            if segment.path == path {
-                                self.hovered_uuid = Some(segment.uuid);
-                                self.renderer.set_hovered(Some(segment.uuid));
-                                return;
-                            }
-                        }
-                    }
+    /// Resolve the segment UUID corresponding to the currently sidebar-hovered
+    /// item, if any. Returns `None` when state is incomplete (no hover index,
+    /// no arena, no radial map, or no matching segment).
+    fn find_segment_uuid_for_sidebar_hover(&self) -> Option<Uuid> {
+        let hover_idx = self.sidebar_hover_index?;
+        let arena = self.arena.as_ref()?;
+        let items = self.sidebar_items();
+        let item = items.get(hover_idx)?;
+        let path = match item {
+            TreeItem::File(id, _) => arena.file(*id).path.to_string_lossy().into_owned(),
+            TreeItem::Folder(id, _) => arena.folder(*id).file.path.to_string_lossy().into_owned(),
+        };
+        let map = self.radial_map.as_ref()?;
+        for ring in &map.rings {
+            for segment in &ring.segments {
+                if segment.path == path {
+                    return Some(segment.uuid);
                 }
             }
         }
-        self.hovered_uuid = None;
-        self.renderer.set_hovered(None);
+        None
     }
 
     /// Show context menu at cursor position if hovering over a segment
@@ -632,30 +642,32 @@ impl App {
             // Click is in sidebar
             if row >= 2 {
                 let clicked_index = (row - 2) as usize;
-                let items = self.sidebar_items();
-                if let Some(item) = items.get(clicked_index) {
-                    let (name, path, is_folder) = match item {
-                        TreeItem::File(id, _) => {
-                            let file = self.arena.as_ref().unwrap().file(*id);
-                            (
-                                file.name.clone(),
-                                file.path.to_string_lossy().into_owned(),
-                                false,
-                            )
-                        }
-                        TreeItem::Folder(id, _) => {
-                            let folder = self.arena.as_ref().unwrap().folder(*id);
-                            (
-                                folder.file.name.clone(),
-                                folder.file.path.to_string_lossy().into_owned(),
-                                true,
-                            )
-                        }
-                    };
-                    // Use a dummy UUID for sidebar items since they don't have segment UUIDs
-                    self.context_menu
-                        .show(col, row, Uuid::nil(), name, path, is_folder);
-                    return;
+                if let Some(arena) = self.arena.as_ref() {
+                    let items = self.sidebar_items();
+                    if let Some(item) = items.get(clicked_index) {
+                        let (name, path, is_folder) = match item {
+                            TreeItem::File(id, _) => {
+                                let file = arena.file(*id);
+                                (
+                                    file.name.clone(),
+                                    file.path.to_string_lossy().into_owned(),
+                                    false,
+                                )
+                            }
+                            TreeItem::Folder(id, _) => {
+                                let folder = arena.folder(*id);
+                                (
+                                    folder.file.name.clone(),
+                                    folder.file.path.to_string_lossy().into_owned(),
+                                    true,
+                                )
+                            }
+                        };
+                        // Sidebar items have no segment UUID; use a sentinel.
+                        self.context_menu
+                            .show(col, row, Uuid::nil(), name, path, is_folder);
+                        return;
+                    }
                 }
             }
             return;

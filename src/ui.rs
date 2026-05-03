@@ -162,14 +162,12 @@ fn render_radial_map(f: &mut Frame, app: &App, area: Rect) {
     use ratatui::symbols::Marker;
     use ratatui::widgets::canvas::Canvas;
 
-    if app.radial_map.is_none() {
+    let Some(map) = app.radial_map.as_ref() else {
         let placeholder =
             Paragraph::new("No data").block(Block::default().borders(Borders::ALL).title("Map"));
         f.render_widget(placeholder, area);
         return;
-    }
-
-    let map = app.radial_map.as_ref().unwrap();
+    };
 
     // Calculate max radius from map (this is already scaled to fit)
     let max_radius = map

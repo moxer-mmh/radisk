@@ -7,6 +7,7 @@ mod scanner;
 mod tree;
 mod ui;
 
+use anyhow::{bail, Context, Result};
 use app::App;
 use clap::Parser;
 use crossterm::{
@@ -62,13 +63,15 @@ impl Drop for TerminalGuard {
     }
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    let path = cli.path.canonicalize()?;
+    let path = cli
+        .path
+        .canonicalize()
+        .with_context(|| format!("failed to canonicalize {}", cli.path.display()))?;
     if !path.is_dir() {
-        eprintln!("Error: {} is not a directory", path.display());
-        std::process::exit(1);
+        bail!("{} is not a directory", path.display());
     }
 
     // Setup panic hook to restore terminal
@@ -79,22 +82,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }));
 
     // Setup terminal
-    enable_raw_mode()?;
+    enable_raw_mode().context("failed to enable raw mode")?;
     let mut stdout = io::stdout();
     execute!(
         stdout,
         EnterAlternateScreen,
         EnableMouseCapture,
         cursor::Hide
-    )?;
+    )
+    .context("failed to enter alternate screen")?;
     let backend = CrosstermBackend::new(stdout);
-    let mut terminal = Terminal::new(backend)?;
+    let mut terminal = Terminal::new(backend).context("failed to construct terminal backend")?;
 
     // Create guard to ensure cleanup
     let _guard = TerminalGuard;
 
     // Clear screen
-    terminal.clear()?;
+    terminal.clear().context("failed to clear terminal")?;
 
     // Get actual terminal size
     let (term_width, term_height) = size().unwrap_or((80, 24));
@@ -104,7 +108,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let result = run_app(&mut terminal, &mut app);
 
     // Proper restore sequence
-    terminal.clear()?;
+    let _ = terminal.clear();
     restore_terminal();
     // Move cursor to bottom after leaving alternate screen
     if let Ok((_, rows)) = size() {
@@ -114,20 +118,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Prevent guard from running again
     std::mem::forget(_guard);
 
-    if let Err(err) = result {
-        eprintln!("Error: {}", err);
-        std::process::exit(1);
-    }
-
-    Ok(())
+    result
 }
 
-fn run_app<B: ratatui::backend::Backend>(
-    terminal: &mut Terminal<B>,
-    app: &mut App,
-) -> Result<(), Box<dyn std::error::Error>>
+fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()>
 where
-    <B as ratatui::backend::Backend>::Error: 'static,
+    <B as ratatui::backend::Backend>::Error: std::error::Error + Send + Sync + 'static,
 {
     // Start initial scan
     app.start_scan();
@@ -137,11 +133,13 @@ where
         app.update_scan_progress();
 
         // Draw
-        terminal.draw(|f| ui::render(f, app))?;
+        terminal
+            .draw(|f| ui::render(f, app))
+            .context("failed to draw frame")?;
 
         // Handle events
-        if event::poll(Duration::from_millis(50))? {
-            match event::read()? {
+        if event::poll(Duration::from_millis(50)).context("failed to poll for events")? {
+            match event::read().context("failed to read terminal event")? {
                 Event::Key(key) if key.kind == KeyEventKind::Press => {
                     app.handle_key(key);
                 }
