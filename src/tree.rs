@@ -342,6 +342,41 @@ pub fn format_size(size: u64) -> String {
     }
 }
 
+/// Magnitude bucket used by the UI to colour-code sizes so the
+/// eye picks out the genuinely large entries at a glance.
+///
+/// - `Tiny`   (< 1 MiB)  — dim grey, mostly metadata
+/// - `Small`  (< 100 MiB) — default fg, "normal" files
+/// - `Medium` (< 1 GiB)   — cyan, worth a look
+/// - `Large`  (< 10 GiB)  — yellow, watch this
+/// - `Huge`   (≥ 10 GiB)  — red, this is what's eating your disk
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SizeMagnitude {
+    Tiny,
+    Small,
+    Medium,
+    Large,
+    Huge,
+}
+
+impl SizeMagnitude {
+    pub fn classify(size: u64) -> Self {
+        const MB: u64 = 1024 * 1024;
+        const GB: u64 = MB * 1024;
+        if size >= 10 * GB {
+            SizeMagnitude::Huge
+        } else if size >= GB {
+            SizeMagnitude::Large
+        } else if size >= 100 * MB {
+            SizeMagnitude::Medium
+        } else if size >= MB {
+            SizeMagnitude::Small
+        } else {
+            SizeMagnitude::Tiny
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
