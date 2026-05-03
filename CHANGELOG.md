@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (Phase 8 — partition-style mount picker)
+Inspired by the "select a disk" first screen of EaseUS Partition
+Master, MiniTool Partition Wizard, NIUBI Partition Editor, and
+AOMEI Partition Assistant — before drilling into a single tree,
+let the user see the whole disk landscape and pick which mount to
+scan.
+
+- **`radisk --mounts`** opens an interactive picker before
+  scanning. Each row shows a colour-coded usage bar (green ≤70%,
+  yellow ≤89%, red above), the percent used, the mount point,
+  used / total in human units, the filesystem type, and the
+  device. Sorted fullest-first so the disk needing attention is
+  always at the top.
+- New `mounts` module discovers filesystems on Linux by parsing
+  `/proc/mounts` and calling `statvfs(2)` on each entry. Pseudo
+  filesystems (`proc`, `sysfs`, `cgroup`, `devtmpfs`, `tmpfs`,
+  `overlay`, etc.) are filtered out so the picker only shows
+  storage that's worth analysing. Octal-escaped mount points
+  (`\040` for spaces, etc.) decode correctly. Bind-mount and
+  overlay duplicates dedupe by target path.
+- New `picker` module renders the list using the same crossterm /
+  ratatui terminal as the App, so the picker→scan transition is
+  flicker-free. Keys: `j/k` or `↑/↓` to move, `Enter` to scan,
+  `g/G` for first/last, `q/Esc` to cancel cleanly (no error).
+- `--mounts` is mutually exclusive with `--export` and
+  `--import`. On non-Linux platforms the picker is empty with a
+  documented "no mountpoints discovered" placeholder so the
+  binary still starts.
+- 7 unit tests cover the `/proc/mounts` parser (realistic sample,
+  pseudo-fs filter, dedup, octal escapes, malformed-line skip),
+  the `used_fraction` math (zero-total guard + sane interval), and
+  the live discovery on Linux test hosts.
+- New `nix` dep with the `fs` feature for the `statvfs` binding.
+
 ### Added (Phase 7 — diff subcommand + polish)
 - **`radisk diff A B` subcommand** compares two snapshots and prints
   the folder-level differences to stdout, sorted by absolute size

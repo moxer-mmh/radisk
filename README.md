@@ -87,6 +87,7 @@ radisk --exclude node_modules ~/    # skip a path glob
 radisk --config ./my-config.toml /  # use an explicit config file
 radisk --export snap.radisk /usr    # headless scan + write a snapshot
 radisk --import snap.radisk         # open a snapshot, no scan
+radisk --mounts                     # partition-style picker before scanning
 radisk diff a.radisk b.radisk       # compare two snapshots, stdout
 radisk --help                       # full CLI surface
 ```
@@ -205,6 +206,7 @@ CI (GitHub Actions) runs all four on every push and pull request.
 | `config`, `keybinds` | TOML loader (smart-merge) + chord DSL                         |
 | `delete`             | Trash-cli detection + TOCTOU-checked delete                   |
 | `snapshot`, `diff`   | `.radisk` export/import + folder-level diff                   |
+| `mounts`, `picker`   | Partition-style mount picker (`--mounts`)                     |
 | `app`, `ui`          | Event loop, ratatui layout, status bar, dialogs               |
 
 Full detail in [`ARCHITECTURE.md`](ARCHITECTURE.md).
