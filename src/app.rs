@@ -1,8 +1,10 @@
 use crate::color::ColorConfig;
+use crate::config::Config;
 use crate::context_menu::{ContextMenu, MenuAction};
+use crate::keybinds::{Action, Keybinds};
 use crate::radial::{build_radial_map, RadialConfig, RadialMap, Segment};
 use crate::renderer::{CanvasCoords, RadialRenderer};
-use crate::scanner::{ScanConfig, ScanProgress};
+use crate::scanner::ScanProgress;
 use crate::scanner_streaming::{scan_streaming, ScanEvent, ScanHandle};
 use crate::tree::{format_size, FolderId, TreeArena, TreeItem};
 use crossterm::event::{KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKind};
@@ -40,6 +42,13 @@ pub struct App {
     pub arena: Option<TreeArena>,
     pub current_path: PathBuf,
     pub ring_depth: usize,
+    /// Resolved user configuration. Owned by the App because most config
+    /// reads are not in performance-critical paths and a single owner
+    /// avoids cloning sub-structs to event handlers.
+    pub config: Config,
+    /// Keybind table, derived from `config.keybinds` at construction
+    /// time. Looked up once per key event in `handle_viewing_key`.
+    pub keybinds: Keybinds,
     pub radial_map: Option<RadialMap>,
     pub renderer: RadialRenderer,
     pub hovered_uuid: Option<Uuid>,
@@ -70,13 +79,24 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(path: PathBuf, ring_depth: usize, term_width: u16, term_height: u16) -> Self {
+    pub fn new(path: PathBuf, config: Config, term_width: u16, term_height: u16) -> Self {
+        let ring_depth = config.display.ring_depth;
+        // An invalid keybind config falls back to defaults rather than
+        // refusing to start the App; the user already saw the parse
+        // error at config-load time, and locking them out of the tool
+        // because of a bad rebind is worse than running with defaults.
+        let keybinds = Keybinds::from_config(&config.keybinds).unwrap_or_else(|err| {
+            eprintln!("warning: ignoring invalid keybinds config: {:#}", err);
+            Keybinds::defaults()
+        });
         Self {
             mode: AppMode::Scanning,
             focus: Focus::Map,
             arena: None,
             current_path: path,
             ring_depth,
+            config,
+            keybinds,
             radial_map: None,
             renderer: RadialRenderer::new(ColorConfig::default()),
             hovered_uuid: None,
@@ -115,8 +135,8 @@ impl App {
         self.radial_map = None;
         self.arena = None;
 
-        let config = ScanConfig::default();
-        self.scan_handle = Some(scan_streaming(&self.current_path, &config));
+        let scan_config = self.config.to_scan_config();
+        self.scan_handle = Some(scan_streaming(&self.current_path, &scan_config));
     }
 
     /// Rebuild the radial map from current state
@@ -199,19 +219,28 @@ impl App {
     }
 
     fn handle_viewing_key(&mut self, key: KeyEvent) {
-        match key.code {
-            KeyCode::Char('q') | KeyCode::Esc => self.should_quit = true,
-            KeyCode::Char('?') => self.mode = AppMode::Help,
-            KeyCode::Char('u') | KeyCode::Backspace => self.navigate_up(),
-            KeyCode::Enter => self.navigate_into_hovered(),
-            KeyCode::Char('+') | KeyCode::Char('=') => self.zoom_in(),
-            KeyCode::Char('-') => self.zoom_out(),
-            KeyCode::Char('r') => self.start_scan(),
-            KeyCode::Char('d') => self.trigger_delete(),
-            KeyCode::Tab => self.toggle_focus(),
-            KeyCode::Up | KeyCode::Char('k') => self.move_hover_up(),
-            KeyCode::Down | KeyCode::Char('j') => self.move_hover_down(),
-            _ => {}
+        let Some(action) = self.keybinds.action_for(key) else {
+            return;
+        };
+        self.dispatch_action(action);
+    }
+
+    /// Execute a resolved [`Action`] against the App. Centralised so
+    /// future input sources (e.g. mouse-driven menu items) can fan into
+    /// the same dispatch table.
+    fn dispatch_action(&mut self, action: Action) {
+        match action {
+            Action::Quit => self.should_quit = true,
+            Action::Help => self.mode = AppMode::Help,
+            Action::NavigateUp => self.navigate_up(),
+            Action::NavigateInto => self.navigate_into_hovered(),
+            Action::ZoomIn => self.zoom_in(),
+            Action::ZoomOut => self.zoom_out(),
+            Action::Rescan => self.start_scan(),
+            Action::Delete => self.trigger_delete(),
+            Action::ToggleFocus => self.toggle_focus(),
+            Action::MoveUp => self.move_hover_up(),
+            Action::MoveDown => self.move_hover_down(),
         }
     }
 

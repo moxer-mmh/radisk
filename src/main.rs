@@ -1,6 +1,8 @@
 mod app;
 mod color;
+mod config;
 mod context_menu;
+mod keybinds;
 mod radial;
 mod renderer;
 mod scanner;
@@ -11,6 +13,7 @@ mod ui;
 use anyhow::{bail, Context, Result};
 use app::App;
 use clap::Parser;
+use config::Config;
 use crossterm::{
     cursor,
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyEventKind},
@@ -35,9 +38,15 @@ struct Cli {
     #[arg(default_value = ".")]
     path: PathBuf,
 
-    /// Number of concentric rings to display
-    #[arg(short, long, default_value = "5")]
-    depth: usize,
+    /// Number of concentric rings to display. Overrides
+    /// `display.ring_depth` from the config file.
+    #[arg(short, long)]
+    depth: Option<usize>,
+
+    /// Path to a TOML config file. Defaults to
+    /// `$XDG_CONFIG_HOME/radisk/config.toml` (or the platform equivalent).
+    #[arg(long)]
+    config: Option<PathBuf>,
 }
 
 /// Restore terminal to usable state
@@ -75,6 +84,17 @@ fn main() -> Result<()> {
         bail!("{} is not a directory", path.display());
     }
 
+    // Load config: explicit --config wins, else the platform default path
+    // (which falls back to compiled-in defaults if missing). CLI flags
+    // applied after loading override file values.
+    let mut cfg = match cli.config.as_deref() {
+        Some(p) => Config::load_from_path(p)?,
+        None => Config::load_default()?,
+    };
+    if let Some(d) = cli.depth {
+        cfg.display.ring_depth = d.max(1);
+    }
+
     // Setup panic hook to restore terminal
     let original_hook = panic::take_hook();
     panic::set_hook(Box::new(move |info| {
@@ -105,7 +125,7 @@ fn main() -> Result<()> {
     let (term_width, term_height) = size().unwrap_or((80, 24));
 
     // Create app and run
-    let mut app = App::new(path.clone(), cli.depth, term_width, term_height);
+    let mut app = App::new(path.clone(), cfg, term_width, term_height);
     let result = run_app(&mut terminal, &mut app);
 
     // Proper restore sequence
