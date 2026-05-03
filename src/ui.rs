@@ -5,7 +5,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, Paragraph, Wrap},
+    widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap},
     Frame,
 };
 
@@ -328,133 +328,94 @@ fn render_tooltip(f: &mut Frame, text: &str) {
     f.render_widget(tooltip, tooltip_area);
 }
 
-/// Render help overlay
+/// Render help overlay.
+///
+/// The previous implementation rendered the main view, then a dim
+/// `Block` over the whole frame, then the help block on top. The
+/// problem: `Block::render` only *styles* cells — it does not
+/// reset their `symbol`, so the radial-canvas Braille glyphs and
+/// the sidebar text bled through the help body.
+///
+/// Fix: use [`Clear`] (which writes a space to every cell of its
+/// area, with default style) before each layer that needs to look
+/// truly opaque. The result is a clean, readable overlay regardless
+/// of what's behind it.
 fn render_help(f: &mut Frame, app: &App) {
     let area = f.area();
 
-    // First render the main view behind
+    // 1. Background pass. The main view is still drawn underneath
+    //    so the modal feels grounded; we wipe everything with Clear
+    //    afterwards and tint the whole frame with a dim panel so the
+    //    help foreground has an unambiguous backdrop.
     render_viewing(f, app);
+    f.render_widget(Clear, area);
+    let dim = Block::default().style(Style::default().bg(Color::Rgb(15, 15, 22)));
+    f.render_widget(dim, area);
 
-    // Render dark overlay to dim the background
-    let overlay = Block::default()
-        .style(Style::default().bg(Color::Rgb(10, 10, 15)))
-        .borders(Borders::NONE);
-    f.render_widget(overlay, f.area());
+    // 2. Carve out the help panel. 70% wide, 80% tall so the keymap
+    //    fits without wrapping at typical terminal widths.
+    let help_area = centered_rect(70, 80, area);
 
-    // Then overlay help
-    let help_area = centered_rect(60, 70, area);
+    // 3. Wipe the panel cells specifically so the dim tint above
+    //    can't leak symbol bits in either, then paint the help.
+    f.render_widget(Clear, help_area);
+
+    let key_style = Style::default()
+        .fg(Color::LightCyan)
+        .add_modifier(Modifier::BOLD);
+    let head_style = Style::default()
+        .fg(Color::Yellow)
+        .add_modifier(Modifier::BOLD);
+    let body_style = Style::default().fg(Color::White);
+    let dim_style = Style::default().fg(Color::Gray);
+
+    let row = |chord: &str, label: &str| {
+        Line::from(vec![
+            Span::raw("  "),
+            Span::styled(format!("{:<14}", chord), key_style),
+            Span::styled(label.to_string(), body_style),
+        ])
+    };
+    let head = |t: &str| Line::from(Span::styled(t.to_string(), head_style));
+    let blank = || Line::from("");
 
     let help_text = vec![
+        head("Navigation"),
+        row("h / ← / u / ⌫", "Go to parent directory"),
+        row("l / → / Enter", "Descend into hovered folder"),
+        row("j / k  ↓ / ↑", "Move sidebar selection"),
+        row("gg / G", "Jump to first / last item"),
+        row("Ctrl-d / Ctrl-u", "Half-page down / up"),
+        row("Tab", "Toggle focus (map ↔ sidebar)"),
+        blank(),
+        head("View"),
+        row("v", "Cycle radial / tree / largest-files"),
+        row("Shift+S", "Cycle sort  (size↓ → size↑ → name)"),
+        row("a", "Apparent vs on-disk size (rescans)"),
+        row("+ / = / -", "Zoom rings (in / in / out)"),
+        blank(),
+        head("Actions"),
+        row("r", "Rescan"),
+        row("d", "Delete (trash if trash-put / gio is installed)"),
+        row("Space", "Toggle item in/out of multi-select"),
+        row("Shift+D", "Delete every selected item (one confirm)"),
+        row("Shift+X", "Clear multi-select"),
+        row("o", "Show package owner in status bar"),
+        row("?", "Show / hide this help"),
+        row("q / Esc", "Quit"),
+        blank(),
+        head("Mouse"),
+        row("Left click", "Open folder / go up (centre)"),
+        row("Right click", "Open context menu"),
+        row("Scroll", "Zoom rings"),
+        blank(),
         Line::from(Span::styled(
-            "Keyboard Shortcuts",
-            Style::default()
-                .fg(Color::White)
-                .add_modifier(Modifier::BOLD),
-        )),
-        Line::from(""),
-        Line::from(vec![
-            Span::styled("  q/Esc      ", Style::default().fg(Color::White)),
-            Span::raw("Quit"),
-        ]),
-        Line::from(vec![
-            Span::styled("  h/u/←/⌫    ", Style::default().fg(Color::White)),
-            Span::raw("Go to parent directory"),
-        ]),
-        Line::from(vec![
-            Span::styled("  l/Enter/→  ", Style::default().fg(Color::White)),
-            Span::raw("Open selected folder"),
-        ]),
-        Line::from(vec![
-            Span::styled("  +/-/=      ", Style::default().fg(Color::White)),
-            Span::raw("Zoom in/out (change ring depth)"),
-        ]),
-        Line::from(vec![
-            Span::styled("  r          ", Style::default().fg(Color::White)),
-            Span::raw("Rescan directory"),
-        ]),
-        Line::from(vec![
-            Span::styled("  d          ", Style::default().fg(Color::White)),
-            Span::raw("Delete selected item"),
-        ]),
-        Line::from(vec![
-            Span::styled("  Tab        ", Style::default().fg(Color::White)),
-            Span::raw("Toggle focus (map/sidebar)"),
-        ]),
-        Line::from(vec![
-            Span::styled("  v          ", Style::default().fg(Color::White)),
-            Span::raw("Toggle view (radial / tree / largest)"),
-        ]),
-        Line::from(vec![
-            Span::styled("  Shift+S    ", Style::default().fg(Color::White)),
-            Span::raw("Cycle sort (size↓ / size↑ / name)"),
-        ]),
-        Line::from(vec![
-            Span::styled("  a          ", Style::default().fg(Color::White)),
-            Span::raw("Toggle apparent vs on-disk size (rescans)"),
-        ]),
-        Line::from(vec![
-            Span::styled("  Space      ", Style::default().fg(Color::White)),
-            Span::raw("Toggle item selection (multi-select)"),
-        ]),
-        Line::from(vec![
-            Span::styled("  Shift+D    ", Style::default().fg(Color::White)),
-            Span::raw("Delete every selected item (one confirm)"),
-        ]),
-        Line::from(vec![
-            Span::styled("  Shift+X    ", Style::default().fg(Color::White)),
-            Span::raw("Clear the multi-select set"),
-        ]),
-        Line::from(vec![
-            Span::styled("  o          ", Style::default().fg(Color::White)),
-            Span::raw("Show package owner (pacman/dpkg/rpm/apk + npm/pip/cargo/flatpak/snap)"),
-        ]),
-        Line::from(vec![
-            Span::styled("  j/k  ↓/↑   ", Style::default().fg(Color::White)),
-            Span::raw("Navigate up/down in sidebar"),
-        ]),
-        Line::from(vec![
-            Span::styled("  gg / G     ", Style::default().fg(Color::White)),
-            Span::raw("Jump to first / last sidebar item"),
-        ]),
-        Line::from(vec![
-            Span::styled("  Ctrl+d/u   ", Style::default().fg(Color::White)),
-            Span::raw("Half-page down / up"),
-        ]),
-        Line::from(vec![
-            Span::styled("  ?          ", Style::default().fg(Color::White)),
-            Span::raw("Show this help"),
-        ]),
-        Line::from(""),
-        Line::from(Span::styled(
-            "Mouse",
-            Style::default()
-                .fg(Color::White)
-                .add_modifier(Modifier::BOLD),
-        )),
-        Line::from(""),
-        Line::from(vec![
-            Span::styled("  Left click ", Style::default().fg(Color::White)),
-            Span::raw("Open folder / Go up (center)"),
-        ]),
-        Line::from(vec![
-            Span::styled("  Scroll     ", Style::default().fg(Color::White)),
-            Span::raw("Zoom in/out"),
-        ]),
-        Line::from(""),
-        Line::from(Span::styled(
-            "Support",
-            Style::default()
-                .fg(Color::White)
-                .add_modifier(Modifier::BOLD),
+            "  Press q / Esc / ? / Enter to close",
+            dim_style,
         )),
         Line::from(Span::styled(
-            "  Buy me a coffee: ko-fi.com/mimobn_",
-            Style::default().fg(Color::Gray),
-        )),
-        Line::from(""),
-        Line::from(Span::styled(
-            "Press any key to close",
-            Style::default().fg(Color::Gray),
+            "  Every chord above is rebindable — see docs/KEYBINDS.md",
+            dim_style,
         )),
     ];
 
@@ -463,15 +424,11 @@ fn render_help(f: &mut Frame, app: &App) {
             Block::default()
                 .borders(Borders::ALL)
                 .title(" Help ")
-                .border_style(Style::default().fg(Color::White)),
+                .title_style(head_style)
+                .border_style(Style::default().fg(Color::White))
+                .style(Style::default().bg(Color::Rgb(20, 20, 30))),
         )
         .style(Style::default().bg(Color::Rgb(20, 20, 30)));
-
-    // Render solid background first to prevent canvas text from showing through
-    let bg = Block::default()
-        .style(Style::default().bg(Color::Rgb(20, 20, 30)))
-        .borders(Borders::NONE);
-    f.render_widget(bg, help_area);
 
     f.render_widget(help, help_area);
 }
@@ -557,22 +514,31 @@ fn render_delete_confirmation(f: &mut Frame, app: &App) {
     // First render the main view behind
     render_viewing(f, app);
 
-    // Render dark overlay to dim the background
-    let overlay = Block::default()
-        .style(Style::default().bg(Color::Rgb(20, 20, 20)))
-        .borders(Borders::NONE);
-    f.render_widget(overlay, f.area());
-
+    // Wipe the cells (Block-only style does not reset symbols, so
+    // the radial Braille glyphs would otherwise bleed through).
     let area = f.area();
+    f.render_widget(Clear, area);
+    let dim = Block::default().style(Style::default().bg(Color::Rgb(15, 15, 22)));
+    f.render_widget(dim, area);
+
     let delete_area = centered_rect(40, 25, area);
+    f.render_widget(Clear, delete_area);
 
-    let path_display = app
-        .delete_path
-        .as_ref()
-        .map(|p| p.display().to_string())
-        .unwrap_or_else(|| "unknown".to_string());
+    // For batch deletes, the dialog summarises the selection
+    // instead of pointing at a single missing path.
+    let batch_count = app.selected_paths.len();
+    let path_display = if batch_count > 0 {
+        format!("{} selected entries", batch_count)
+    } else {
+        app.delete_path
+            .as_ref()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "unknown".to_string())
+    };
 
-    let type_text = if app.delete_is_folder {
+    let type_text = if batch_count > 0 {
+        "selection"
+    } else if app.delete_is_folder {
         "folder"
     } else {
         "file"
