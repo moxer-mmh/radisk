@@ -99,7 +99,7 @@ impl TreeArena {
             items.push(TreeItem::Folder(fid, self.folders[fid.0].file.size));
         }
 
-        items.sort_by(|a, b| b.size().cmp(&a.size()));
+        items.sort_by_key(|item| std::cmp::Reverse(item.size()));
         items
     }
 

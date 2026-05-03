@@ -223,7 +223,13 @@ pub fn build_radial_map(arena: &TreeArena, root_id: FolderId, config: &RadialCon
     }
 }
 
-/// Build segments for a folder's direct children
+/// Build segments for a folder's direct children.
+///
+/// Eight parameters is unavoidable here: the recursive layout has to thread
+/// the arena, the current angular slice, depth-indexed visibility limits, and
+/// configuration through each level. Phase 2 will replace this with a builder
+/// that owns the per-level context.
+#[allow(clippy::too_many_arguments)]
 fn build_segments_for_folder(
     arena: &TreeArena,
     folder_id: FolderId,
