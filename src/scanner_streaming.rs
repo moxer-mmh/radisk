@@ -204,32 +204,36 @@ fn build_exclude_set(patterns: &[String], tx: &Sender<ScanEvent>) -> Option<Glob
     }
 }
 
-/// Compute the size of `path` for accounting purposes.
+/// Compute the size of an entry from an already-acquired
+/// [`std::fs::Metadata`]. Phase 24 split the syscall (one
+/// `std::fs::metadata` per file) from the size policy decision, so
+/// the walker can read `metadata` exactly once and feed it to both
+/// the size and inode-dedup paths instead of stat-ing the same file
+/// twice. On a 2M-file scan that halves the syscall count for the
+/// hot path — visibly faster, especially on cold caches.
 ///
 /// When `apparent` is `false` (default) the on-disk size is used:
-/// `st_blocks * 512` on Unix, falling back to the apparent length when
-/// the block count is zero or unavailable. This matches `du` and
-/// FileLight.
+/// `st_blocks * 512` on Unix, falling back to the apparent length
+/// when the block count is zero or unavailable. This matches `du`
+/// and FileLight.
 ///
-/// When `apparent` is `true` the byte count from `metadata.len()` is
-/// returned directly — what `ls -l` shows. Useful for sparse files,
-/// transparently-compressed filesystems, and CoW snapshots where the
-/// on-disk number is misleading.
-fn entry_size(path: &Path, apparent: bool) -> u64 {
+/// When `apparent` is `true` the byte count from `metadata.len()`
+/// is returned directly — what `ls -l` shows. Useful for sparse
+/// files, transparently-compressed filesystems, and CoW snapshots
+/// where the on-disk number is misleading.
+fn size_from_metadata(metadata: &std::fs::Metadata, apparent: bool) -> u64 {
     if apparent {
-        return std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+        return metadata.len();
     }
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
-        if let Ok(metadata) = std::fs::metadata(path) {
-            let blocks = metadata.blocks();
-            if blocks > 0 {
-                return blocks * 512;
-            }
+        let blocks = metadata.blocks();
+        if blocks > 0 {
+            return blocks * 512;
         }
     }
-    std::fs::metadata(path).map(|m| m.len()).unwrap_or(0)
+    metadata.len()
 }
 
 /// Walker entrypoint, shared-arena variant (Phase 21).
@@ -382,20 +386,24 @@ fn run(
             continue;
         }
 
-        // Regular file.
-        let size = entry_size(&entry_path, config.use_apparent_size);
+        // Regular file. Single metadata call: size + (on Unix)
+        // inode dedup + inode capture all read from the same
+        // `Metadata`. Pre-Phase-24 this path made two separate
+        // `std::fs::metadata` calls per file; on a 2M-file scan
+        // that's ~2M syscalls saved.
+        let metadata = match std::fs::metadata(&entry_path) {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+        let size = size_from_metadata(&metadata, config.use_apparent_size);
 
         #[cfg(unix)]
         let inode = {
             use std::os::unix::fs::MetadataExt;
-            if let Ok(metadata) = std::fs::metadata(&entry_path) {
-                if !seen_inodes.insert((metadata.dev(), metadata.ino())) {
-                    continue;
-                }
-                Some(metadata.ino())
-            } else {
-                None
+            if !seen_inodes.insert((metadata.dev(), metadata.ino())) {
+                continue;
             }
+            Some(metadata.ino())
         };
         #[cfg(not(unix))]
         let inode: Option<u64> = None;
