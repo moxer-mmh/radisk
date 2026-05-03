@@ -174,6 +174,34 @@ impl TreeArena {
         }
     }
 
+    /// Look up a folder by its on-disk path, walking down from the
+    /// arena's root. Returns `None` when the path is outside the
+    /// arena (e.g. the user is trying to navigate to a sibling of
+    /// the original scan root) or when the walker hasn't reached
+    /// the path yet during a live scan.
+    ///
+    /// This is the fallback for `App::navigate_into(path)` when
+    /// only the path is known. The hot navigation path
+    /// (`navigate_into_id`) skips this lookup entirely by carrying
+    /// the `FolderId` from sidebar / segment data.
+    pub fn find_folder_by_path(&self, path: &std::path::Path) -> Option<FolderId> {
+        let root_id = self.root()?;
+        let root_path = self.folder(root_id).file.path.as_path();
+        let suffix = path.strip_prefix(root_path).ok()?;
+        let mut current = root_id;
+        for component in suffix.components() {
+            let name = component.as_os_str().to_string_lossy();
+            let folder = self.folder(current);
+            let next = folder
+                .children_folders
+                .iter()
+                .copied()
+                .find(|id| self.folder(*id).file.name == name)?;
+            current = next;
+        }
+        Some(current)
+    }
+
     /// Get total file count in a folder (recursive)
     pub fn total_file_count(&self, folder_id: FolderId) -> u64 {
         let folder = &self.folders[folder_id.0];
@@ -377,6 +405,34 @@ mod tests {
         // Root should have accumulated all sizes: 1000 + 100 + 500 = 1600
         assert_eq!(root.file.size, 1600);
         assert_eq!(root.child_count, 3);
+    }
+
+    #[test]
+    fn find_folder_by_path_resolves_arena_root() {
+        let arena = TreeArena::create_test_tree();
+        let root = arena.root().unwrap();
+        let by_path = arena.find_folder_by_path(&PathBuf::from("/test")).unwrap();
+        assert_eq!(by_path.0, root.0);
+    }
+
+    #[test]
+    fn find_folder_by_path_resolves_descendant() {
+        let arena = TreeArena::create_test_tree();
+        let by_path = arena
+            .find_folder_by_path(&PathBuf::from("/test/subdir"))
+            .expect("subdir should be reachable");
+        assert_eq!(arena.folder(by_path).file.name, "subdir");
+    }
+
+    #[test]
+    fn find_folder_by_path_returns_none_for_outside_paths() {
+        let arena = TreeArena::create_test_tree();
+        assert!(arena
+            .find_folder_by_path(&PathBuf::from("/somewhere/else"))
+            .is_none());
+        assert!(arena
+            .find_folder_by_path(&PathBuf::from("/test/missing"))
+            .is_none());
     }
 
     #[test]

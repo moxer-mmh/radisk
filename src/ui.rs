@@ -135,11 +135,11 @@ fn render_sidebar(f: &mut Frame, app: &App, area: Rect) {
     // exists in the live arena.
     let rows: Vec<Row> = app
         .with_arena(|arena| {
-            let Some(root) = arena.root() else {
+            let Some(focus) = app.focus_folder_id(arena) else {
                 return Vec::new();
             };
             arena
-                .folder_items_sorted(root, app.sort_mode)
+                .folder_items_sorted(focus, app.sort_mode)
                 .into_iter()
                 .map(|item| match item {
                     TreeItem::File(id, size) => {
