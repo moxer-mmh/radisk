@@ -111,6 +111,11 @@ pub struct App {
     /// `true` = Yes, `false` = No. Always initialised to `false` so a stray
     /// Enter keypress can never trigger an irreversible deletion.
     pub delete_selected: bool,
+    /// `true` while the user has typed `g` and we're waiting for the
+    /// follow-up keystroke that completes a vim-style two-key
+    /// sequence (currently only `gg` → jump to first item). Reset on
+    /// any non-`g` keypress.
+    pub pending_g: bool,
 }
 
 impl App {
@@ -166,6 +171,7 @@ impl App {
             delete_inode: None,
             // Default to No: a destructive action requires deliberate input.
             delete_selected: false,
+            pending_g: false,
         }
     }
 
@@ -231,7 +237,16 @@ impl App {
                 }
             }
             AppMode::Help => {
-                self.mode = AppMode::Viewing;
+                // Vim-style: `q` / `Esc` / `?` close the overlay.
+                // Any other keypress is ignored so users can't drop
+                // into a stale state by mashing keys while the help
+                // is open.
+                if matches!(
+                    key.code,
+                    KeyCode::Char('q') | KeyCode::Esc | KeyCode::Char('?') | KeyCode::Enter
+                ) {
+                    self.mode = AppMode::Viewing;
+                }
             }
             AppMode::ConfirmDelete => {
                 match key.code {
@@ -243,7 +258,16 @@ impl App {
                             self.mode = AppMode::Viewing;
                         }
                     }
-                    KeyCode::Left | KeyCode::Right | KeyCode::Char('j') | KeyCode::Char('k') => {
+                    KeyCode::Left
+                    | KeyCode::Right
+                    | KeyCode::Char('j')
+                    | KeyCode::Char('k')
+                    | KeyCode::Char('h')
+                    | KeyCode::Char('l')
+                    | KeyCode::Tab => {
+                        // Yes/No is a horizontal choice — h/l (vim
+                        // horizontal motion) and Tab join the existing
+                        // arrows / j / k as togglers.
                         self.delete_selected = !self.delete_selected;
                     }
                     KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
@@ -269,6 +293,24 @@ impl App {
     }
 
     fn handle_viewing_key(&mut self, key: KeyEvent) {
+        // Vim two-key sequence: `gg` jumps to the first item.
+        // The state machine here is intentionally tiny — only one
+        // sequence is supported, so a single bool is enough. Any
+        // non-`g` keystroke clears the pending state.
+        if self.pending_g {
+            self.pending_g = false;
+            if matches!(key.code, KeyCode::Char('g')) {
+                self.dispatch_action(Action::MoveToFirst);
+                return;
+            }
+            // fall through to normal dispatch below
+        } else if matches!(key.code, KeyCode::Char('g'))
+            && key.modifiers == crossterm::event::KeyModifiers::NONE
+        {
+            self.pending_g = true;
+            return;
+        }
+
         let Some(action) = self.keybinds.action_for(key) else {
             return;
         };
@@ -314,7 +356,42 @@ impl App {
                 self.status_message = format!("Cleared {} selection(s)", n);
             }
             Action::ShowOwner => self.show_owner_for_current(),
+            Action::MoveToFirst => self.move_sidebar_to(0),
+            Action::MoveToLast => {
+                let n = self.sidebar_items().len();
+                if n > 0 {
+                    self.move_sidebar_to(n - 1);
+                }
+            }
+            Action::MoveHalfPageDown => self.move_sidebar_by(self.half_page_step() as isize),
+            Action::MoveHalfPageUp => self.move_sidebar_by(-(self.half_page_step() as isize)),
         }
+    }
+
+    /// Half the visible sidebar height in rows, with a sane minimum
+    /// so a tiny terminal still moves at least one row per Ctrl-d.
+    fn half_page_step(&self) -> usize {
+        // Status bar (2) + borders (2) ≈ 4; halve the rest.
+        let rows = self.terminal_size.1.saturating_sub(4) / 2;
+        rows.max(1) as usize
+    }
+
+    fn move_sidebar_to(&mut self, idx: usize) {
+        let n = self.sidebar_items().len();
+        if n == 0 {
+            return;
+        }
+        self.sidebar_index = idx.min(n - 1);
+    }
+
+    fn move_sidebar_by(&mut self, delta: isize) {
+        let n = self.sidebar_items().len() as isize;
+        if n == 0 {
+            return;
+        }
+        let cur = self.sidebar_index as isize;
+        let next = (cur + delta).clamp(0, n - 1);
+        self.sidebar_index = next as usize;
     }
 
     /// Look up (or recall from cache) the pacman package owning the

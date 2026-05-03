@@ -60,6 +60,14 @@ pub enum Action {
     /// Show the pacman package owner of the selected entry in the
     /// status bar (Arch-only; no-op on other distros).
     ShowOwner,
+    /// Jump to the first sidebar item (vim-style `gg`).
+    MoveToFirst,
+    /// Jump to the last sidebar item (vim-style `G`).
+    MoveToLast,
+    /// Move half a screen down (vim-style `Ctrl-d`).
+    MoveHalfPageDown,
+    /// Move half a screen up (vim-style `Ctrl-u`).
+    MoveHalfPageUp,
 }
 
 impl Action {
@@ -85,6 +93,10 @@ impl Action {
             Action::DeleteSelected => "delete_selected",
             Action::ClearSelection => "clear_selection",
             Action::ShowOwner => "show_owner",
+            Action::MoveToFirst => "move_to_first",
+            Action::MoveToLast => "move_to_last",
+            Action::MoveHalfPageDown => "move_half_page_down",
+            Action::MoveHalfPageUp => "move_half_page_up",
         }
     }
 
@@ -108,6 +120,10 @@ impl Action {
             "delete_selected" => Some(Action::DeleteSelected),
             "clear_selection" => Some(Action::ClearSelection),
             "show_owner" => Some(Action::ShowOwner),
+            "move_to_first" => Some(Action::MoveToFirst),
+            "move_to_last" => Some(Action::MoveToLast),
+            "move_half_page_down" => Some(Action::MoveHalfPageDown),
+            "move_half_page_up" => Some(Action::MoveHalfPageUp),
             _ => None,
         }
     }
@@ -134,6 +150,10 @@ impl Action {
             Action::DeleteSelected,
             Action::ClearSelection,
             Action::ShowOwner,
+            Action::MoveToFirst,
+            Action::MoveToLast,
+            Action::MoveHalfPageDown,
+            Action::MoveHalfPageUp,
         ]
     }
 }
@@ -263,8 +283,15 @@ impl Keybinds {
 
         add(KeyCode::Char('u'), KeyModifiers::NONE, Action::NavigateUp);
         add(KeyCode::Backspace, KeyModifiers::NONE, Action::NavigateUp);
+        // Vim alternates: h goes "left" (out of the directory),
+        // l goes "right" (into the highlighted directory). Mirror
+        // arrow-key behaviour for users who don't live on hjkl.
+        add(KeyCode::Char('h'), KeyModifiers::NONE, Action::NavigateUp);
+        add(KeyCode::Left, KeyModifiers::NONE, Action::NavigateUp);
 
         add(KeyCode::Enter, KeyModifiers::NONE, Action::NavigateInto);
+        add(KeyCode::Char('l'), KeyModifiers::NONE, Action::NavigateInto);
+        add(KeyCode::Right, KeyModifiers::NONE, Action::NavigateInto);
 
         add(KeyCode::Char('+'), KeyModifiers::NONE, Action::ZoomIn);
         add(KeyCode::Char('='), KeyModifiers::NONE, Action::ZoomIn);
@@ -311,6 +338,22 @@ impl Keybinds {
         // Lowercase 'o' for "owner" — Arch users will recognise it
         // as the pacman -Qo flag.
         add(KeyCode::Char('o'), KeyModifiers::NONE, Action::ShowOwner);
+
+        // Vim navigation extras. `G` jumps to the bottom of the
+        // sidebar; the matching `gg` (top) is handled in
+        // `App::handle_viewing_key` because chord sequences
+        // aren't part of the single-keypress lookup table.
+        add(KeyCode::Char('G'), KeyModifiers::SHIFT, Action::MoveToLast);
+        add(
+            KeyCode::Char('d'),
+            KeyModifiers::CONTROL,
+            Action::MoveHalfPageDown,
+        );
+        add(
+            KeyCode::Char('u'),
+            KeyModifiers::CONTROL,
+            Action::MoveHalfPageUp,
+        );
 
         Self { map }
     }
@@ -510,6 +553,46 @@ mod tests {
         let err = Keybinds::from_config(&cfg).unwrap_err();
         let msg = format!("{:#}", err);
         assert!(msg.contains("[keybinds].quit"), "msg = {}", msg);
+    }
+
+    #[test]
+    fn vim_aliases_are_bound() {
+        let kb = Keybinds::defaults();
+        assert_eq!(
+            kb.action_for(ev(KeyCode::Char('h'), KeyModifiers::NONE)),
+            Some(Action::NavigateUp)
+        );
+        assert_eq!(
+            kb.action_for(ev(KeyCode::Char('l'), KeyModifiers::NONE)),
+            Some(Action::NavigateInto)
+        );
+        assert_eq!(
+            kb.action_for(ev(KeyCode::Left, KeyModifiers::NONE)),
+            Some(Action::NavigateUp)
+        );
+        assert_eq!(
+            kb.action_for(ev(KeyCode::Right, KeyModifiers::NONE)),
+            Some(Action::NavigateInto)
+        );
+    }
+
+    #[test]
+    fn vim_navigation_extras_are_bound() {
+        let kb = Keybinds::defaults();
+        // G — capital G, normalised SHIFT-stripped.
+        assert_eq!(
+            kb.action_for(ev(KeyCode::Char('G'), KeyModifiers::SHIFT)),
+            Some(Action::MoveToLast)
+        );
+        // Ctrl-d / Ctrl-u
+        assert_eq!(
+            kb.action_for(ev(KeyCode::Char('d'), KeyModifiers::CONTROL)),
+            Some(Action::MoveHalfPageDown)
+        );
+        assert_eq!(
+            kb.action_for(ev(KeyCode::Char('u'), KeyModifiers::CONTROL)),
+            Some(Action::MoveHalfPageUp)
+        );
     }
 
     #[test]

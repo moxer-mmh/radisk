@@ -289,7 +289,7 @@ fn render_status_bar(f: &mut Frame, app: &App, area: Rect) {
     let help_text = if app.hovered_uuid.is_some() {
         "[u/Backspace] Up  [Enter] Open  [d] Delete  [+/-] Zoom  [r] Rescan  [?] Help  [q] Quit"
     } else {
-        "[u] Up  [d] Del  [+/-] Zoom  [r] Rescan  [Tab] Focus  [v] View  [S] Sort  [a] Apparent  [?] Help  [q] Quit"
+        "[h/l] Up/In  [j/k] Move  [d] Del  [+/-] Zoom  [r] Rescan  [Tab] Focus  [v] View  [S] Sort  [a] Apparent  [?] Help  [q] Quit"
     };
 
     let status_line = Line::from(vec![
@@ -357,11 +357,11 @@ fn render_help(f: &mut Frame, app: &App) {
             Span::raw("Quit"),
         ]),
         Line::from(vec![
-            Span::styled("  u/Backspace", Style::default().fg(Color::White)),
+            Span::styled("  h/u/←/⌫    ", Style::default().fg(Color::White)),
             Span::raw("Go to parent directory"),
         ]),
         Line::from(vec![
-            Span::styled("  Enter      ", Style::default().fg(Color::White)),
+            Span::styled("  l/Enter/→  ", Style::default().fg(Color::White)),
             Span::raw("Open selected folder"),
         ]),
         Line::from(vec![
@@ -409,8 +409,16 @@ fn render_help(f: &mut Frame, app: &App) {
             Span::raw("Show package owner (pacman/dpkg/rpm/apk + npm/pip/cargo/flatpak/snap)"),
         ]),
         Line::from(vec![
-            Span::styled("  j/k        ", Style::default().fg(Color::White)),
+            Span::styled("  j/k  ↓/↑   ", Style::default().fg(Color::White)),
             Span::raw("Navigate up/down in sidebar"),
+        ]),
+        Line::from(vec![
+            Span::styled("  gg / G     ", Style::default().fg(Color::White)),
+            Span::raw("Jump to first / last sidebar item"),
+        ]),
+        Line::from(vec![
+            Span::styled("  Ctrl+d/u   ", Style::default().fg(Color::White)),
+            Span::raw("Half-page down / up"),
         ]),
         Line::from(vec![
             Span::styled("  ?          ", Style::default().fg(Color::White)),
