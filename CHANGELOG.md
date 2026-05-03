@@ -7,6 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (Phase 3 — config & keybinds)
+- **TOML config file** at `$XDG_CONFIG_HOME/radisk/config.toml` (with
+  platform fallbacks via the `directories` crate). All keys optional;
+  missing files fall back to compiled-in defaults; malformed files
+  surface a contextual error instead of silently using defaults.
+  - `[display]` — `ring_depth`, `sidebar_percent` (clamped 10..=60)
+  - `[scan]` — `follow_symlinks`, `max_depth`
+  - `[keybinds]` — per-action chord overrides
+  - `[colors]` — parsed and stored verbatim, reserved for the upcoming
+    theme integration (Phase 3.1)
+- `--config <PATH>` CLI flag to load an explicit config file, useful
+  for testing alternative bindings without touching the system config.
+- **Rebindable keybinds** in `Viewing` mode. New module `keybinds`:
+  - `Action` enum closes the set of bindable verbs the App understands
+    (`quit`, `help`, `navigate_up`, `navigate_into`, `zoom_in`,
+    `zoom_out`, `rescan`, `delete`, `toggle_focus`, `move_up`,
+    `move_down`).
+  - `KeyChord` parses a small DSL (`"q"`, `"esc"`, `"ctrl+q"`,
+    `"shift+down"`, `"alt+enter"`) so config files stay
+    human-friendly. SHIFT is normalised away for letter keys so a
+    config of `"q"` matches whether or not the terminal sent SHIFT.
+  - User overrides REPLACE every default chord for the action they
+    name and add the supplied chord; defaults for other actions are
+    preserved.
+  - Invalid keybinds in the config print a warning and fall back to
+    defaults rather than refusing to start the App.
+- `docs/config.example.toml` ships every documented key with
+  inline syntax notes, ready to drop into a user's config dir.
+
+### Changed
+- `App::new` signature: `(path, config, term_w, term_h)` instead of
+  `(path, ring_depth, term_w, term_h)`. Ring depth now flows in via
+  `Config::display.ring_depth`; the CLI `--depth` flag overrides the
+  file value if present.
+- `App::start_scan` reads scanner options (`follow_symlinks`,
+  `max_depth`) from the loaded config rather than `ScanConfig::default`.
+- `App::handle_viewing_key` no longer hard-codes the chord→behaviour
+  mapping; it looks up an `Action` via `Keybinds::action_for` and
+  dispatches through `App::dispatch_action`, a single fan-out point
+  that future input sources can reuse.
+
 ### Performance
 - Initial scan is **9–14× faster** vs. the legacy synchronous walker on
   representative trees (release-mode benchmarks, single laptop):

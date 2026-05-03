@@ -1,0 +1,82 @@
+# radisk configuration
+#
+# Place this file at one of:
+#   $XDG_CONFIG_HOME/radisk/config.toml      (typical Linux)
+#   ~/.config/radisk/config.toml             (fallback Linux)
+#   ~/Library/Application Support/radisk/config.toml   (macOS)
+#   %APPDATA%\radisk\config.toml             (Windows)
+#
+# Or pass an explicit path: `radisk --config /some/path.toml`.
+#
+# Every key below is optional; missing keys fall back to the compiled-in
+# defaults shown in the comments. A completely empty file is valid and
+# behaves exactly like running with no config at all.
+
+# ─── Display ────────────────────────────────────────────────────────────
+[display]
+# Number of concentric rings to draw. 1..=20. Default: 5.
+# Overridable on the command line with `-d` / `--depth`.
+ring_depth = 5
+
+# Width of the sidebar as a percentage of the terminal width. Clamped to
+# 10..=60 at load time. Default: 25.
+sidebar_percent = 25
+
+
+# ─── Scanner ────────────────────────────────────────────────────────────
+[scan]
+# Whether the walker descends into symlinked directories. Disabled by
+# default — matches `du`/`ncdu` semantics and avoids loops.
+follow_symlinks = false
+
+# Hard recursion ceiling. Defaults to 4096 (DEFAULT_MAX_DEPTH), well
+# above any practical filesystem depth, with plenty of stack headroom.
+# Lower it if you only want to look at the top few levels of a tree.
+max_depth = 4096
+
+
+# ─── Keybinds ───────────────────────────────────────────────────────────
+# Each entry rebinds an action to a single chord. Specifying an action
+# REPLACES every default chord for it (e.g. `quit = "ctrl+q"` removes
+# both the default `q` and `Esc` bindings for Quit).
+#
+# Chord syntax:
+#   - bare characters:  "q"  "?"  "+"  "-"  "="
+#   - named keys:       "esc" "enter" "tab" "backspace" "delete" "space"
+#                       "up" "down" "left" "right"
+#                       "home" "end" "pageup" "pagedown"
+#                       "f1" .. "f12"
+#   - modifiers (case-insensitive, joined by '+'):
+#                       "ctrl"  "shift"  "alt"  "super"
+#
+# Example:    "ctrl+shift+up"   "alt+enter"   "ctrl+c"
+#
+# Recognised actions:
+#   quit, help, navigate_up, navigate_into,
+#   zoom_in, zoom_out, rescan, delete,
+#   toggle_focus, move_up, move_down
+[keybinds]
+# quit          = "ctrl+q"
+# help          = "?"
+# navigate_up   = "u"
+# navigate_into = "enter"
+# zoom_in       = "+"
+# zoom_out      = "-"
+# rescan        = "r"
+# delete        = "d"
+# toggle_focus  = "tab"
+# move_up       = "k"
+# move_down     = "j"
+
+
+# ─── Colors ─────────────────────────────────────────────────────────────
+# Reserved for upcoming theme integration (Phase 3.1). The section is
+# already parsed and validated, so configs written today will keep
+# working when the renderer starts honouring these keys.
+#
+# Planned syntax: `"#rrggbb"` for true-colour terminals, `"ansi:N"` for
+# fallback to a 0..=255 palette index (lets wallust/pywal users plug in
+# without recolouring their terminal).
+[colors]
+# file   = "#a0d8b3"
+# folder = "#3a8fb7"

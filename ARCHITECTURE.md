@@ -80,9 +80,12 @@ context_menu.rs is a small leaf consumed by app.rs.
 
 | Module | Owns | Knows about |
 |--------|------|-------------|
-| `main` | CLI, terminal lifecycle, event loop | `App`, ratatui backend |
-| `app` | `App` state, input dispatch, scan orchestration | `scanner`, `tree`, `radial`, `renderer`, `ui`, `context_menu` |
-| `scanner` | Filesystem walk, progress events, inode dedup | `tree` |
+| `main` | CLI, config bootstrap, terminal lifecycle, event loop | `App`, `Config`, ratatui backend |
+| `app` | `App` state, input dispatch (via `Action`), scan orchestration | `scanner`, `scanner_streaming`, `tree`, `radial`, `renderer`, `ui`, `context_menu`, `config`, `keybinds` |
+| `config` | TOML loader, smart-merge defaults, `to_scan_config()` bridge | `scanner` (for `DEFAULT_MAX_DEPTH`) |
+| `keybinds` | `Action` enum, `KeyChord` DSL parser, `Keybinds::from_config` | `config` |
+| `scanner_streaming` | Production walker (jwalk), `ScanEvent`, `ScanHandle` | `scanner` (`ScanConfig`), `tree` |
+| `scanner` | Reference walker, `ScanConfig`, `ScanError`, `DEFAULT_MAX_DEPTH` | `tree` |
 | `tree` | `TreeArena`, `File`, `Folder`, `FolderId`, `FileId` | nothing internal |
 | `radial` | `RadialMap` and segment angles | `tree` |
 | `renderer` | Braille canvas painting + segment lookup | `radial`, `color` |
