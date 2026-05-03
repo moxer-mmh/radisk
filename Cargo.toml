@@ -23,7 +23,6 @@ clap = { version = "4", features = ["derive"] }
 uuid = { version = "1", features = ["v4"] }
 anyhow = "1.0.102"
 thiserror = "2.0.18"
-jwalk = "0.8.1"
 serde = { version = "1.0.228", features = ["derive"] }
 toml = "1.1.2"
 directories = "6.0.0"
@@ -37,3 +36,4 @@ clap_mangen = "0.3.0"
 tempfile = "3"
 assert_fs = "1"
 approx = "0.5"
+jwalk = "0.8.1"

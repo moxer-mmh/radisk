@@ -1136,12 +1136,13 @@ impl App {
         });
         if let Some(Some((parent_id, path))) = in_arena_target {
             self.nav_history.push(self.current_path.clone());
-            self.current_path = path;
+            self.current_path = path.clone();
             self.current_folder_id = Some(parent_id);
             self.hovered_uuid = None;
             self.renderer.set_hovered(None);
             self.sidebar_index = 0;
             self.rebuild_map();
+            self.notify_focus_change(path);
             return;
         }
         // We're at the arena's root. Going further up means leaving
@@ -1169,12 +1170,13 @@ impl App {
         let in_arena_id = self.with_arena(|arena| arena.find_folder_by_path(&path));
         if let Some(Some(folder_id)) = in_arena_id {
             self.nav_history.push(self.current_path.clone());
-            self.current_path = path;
+            self.current_path = path.clone();
             self.current_folder_id = Some(folder_id);
             self.hovered_uuid = None;
             self.renderer.set_hovered(None);
             self.sidebar_index = 0;
             self.rebuild_map();
+            self.notify_focus_change(path);
             return;
         }
         // Path is outside the current arena — fall back to a fresh
@@ -1194,12 +1196,23 @@ impl App {
         let path = self.with_arena(|arena| arena.folder(folder_id).file.path.clone());
         let Some(path) = path else { return };
         self.nav_history.push(self.current_path.clone());
-        self.current_path = path;
+        self.current_path = path.clone();
         self.current_folder_id = Some(folder_id);
         self.hovered_uuid = None;
         self.renderer.set_hovered(None);
         self.sidebar_index = 0;
         self.rebuild_map();
+        self.notify_focus_change(path);
+    }
+
+    /// Tell the running scan (if any) that the user has shifted
+    /// focus. The walker reorders its priority queue so dirs under
+    /// `path` jump to the front. If there's no active scan, the
+    /// call is a cheap no-op.
+    fn notify_focus_change(&self, path: PathBuf) {
+        if let Some(handle) = self.scan_handle.as_ref() {
+            handle.set_focus(path);
+        }
     }
 
     /// Navigate into the currently hovered folder

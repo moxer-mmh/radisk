@@ -1,44 +1,52 @@
-//! Streaming, parallel filesystem walker.
+//! Streaming, parallel filesystem walker — public surface.
 //!
-//! This module wraps [`jwalk`] (a parallel directory walker built on rayon)
-//! behind a `mpsc::Receiver<ScanEvent>` so the UI thread can render progress
-//! while the scan is still running. Unlike the legacy synchronous walker in
-//! [`crate::scanner`], the iterator drains entries from worker threads while
-//! the consumer thread builds the [`TreeArena`] single-threaded — there is no
-//! shared-mutable arena and no locking on the hot path.
+//! Phase 25 moved the actual walking logic into [`crate::walker`],
+//! a custom worker-pool that supports runtime priority steering.
+//! This module is now the thin compatibility shell that the App
+//! and tests have always called against:
 //!
-//! # Event lifecycle
+//! - [`ScanEvent`] — the events the walker emits over an mpsc.
+//! - [`ScanHandle`] — what `scan_streaming` returns; carries the
+//!   live arena, cancellation flag, and the underlying
+//!   [`crate::walker::WalkerHandle`] so the App can call
+//!   `set_focus` for runtime steering.
+//! - [`scan_streaming`] — spawns the walker and a coordinator
+//!   thread that finalises the arena once every worker exits.
+//!
+//! ## Event lifecycle
 //!
 //! ```text
 //! scan_streaming(path) -> ScanHandle
 //!     │
 //!     ├── ScanEvent::Progress { ... }     (coalesced every PROGRESS_INTERVAL)
-//!     ├── ScanEvent::Warning(...)         (per non-fatal jwalk error)
+//!     ├── ScanEvent::Warning(...)         (per non-fatal walker error)
 //!     │
 //!     └── ScanEvent::Complete(arena)      (terminal — channel closes after)
 //!         OR
 //!         ScanEvent::Failed(reason)       (terminal)
 //! ```
 //!
-//! The walker emits a `Progress` event at most once per
-//! [`PROGRESS_INTERVAL`] and always sends one terminal event before the
-//! channel closes. Consumers drain with `try_recv` from their event loop.
+//! Consumers drain with `try_recv` from their event loop. A
+//! `Progress` event is emitted at most once every
+//! [`PROGRESS_INTERVAL`].
 
 use crate::scanner::ScanConfig;
-use crate::tree::{File, Folder, FolderId, TreeArena};
-use globset::{Glob, GlobSet, GlobSetBuilder};
-use jwalk::WalkDir;
-use std::collections::{HashMap, HashSet};
-use std::path::{Path, PathBuf};
+use crate::tree::TreeArena;
+use crate::walker::{self, WalkerHandle};
+use std::path::Path;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::mpsc::{self, Receiver};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 /// Maximum frequency at which the walker emits [`ScanEvent::Progress`]
 /// updates. Picked to feel responsive on a 60 FPS UI without saturating the
-/// channel on huge trees.
+/// channel on huge trees. The actual timing is enforced inside
+/// [`crate::walker`]; this constant is retained as the public reference
+/// the docs and tests describe.
+#[allow(dead_code)]
 pub const PROGRESS_INTERVAL: Duration = Duration::from_millis(80);
 
 /// Events emitted by a streaming scan.
@@ -70,16 +78,22 @@ pub enum ScanEvent {
 
 /// Handle to a running streaming scan.
 ///
-/// Three pieces of shared state:
+/// Public state:
 ///
-/// - `rx`: events from the worker (Progress / Warning / Complete).
-/// - `live`: an `Arc<Mutex<TreeArena>>` *also held by the walker*.
-///   The walker writes into it directly; the App can `try_lock()`
-///   it at frame time to render a partial radial / sidebar before
-///   the scan finishes. This is what makes huge scans feel
-///   responsive: the user sees folders appear (and big ones grow
-///   first) while the walker is still cataloguing the long tail.
-/// - `handle`: joined on drop so re-scans can't leak a thread.
+/// - `rx`: events from the walker (Progress / Warning / Complete).
+/// - `live`: an `Arc<Mutex<TreeArena>>` shared with the walker
+///   workers. The App `try_lock`s it at frame time to render
+///   partial state.
+/// - `cancel`: cooperative cancellation flag. Set by the App on
+///   `q`, by re-scans, and by `Drop`.
+///
+/// Private state:
+///
+/// - `walker`: an `Arc<WalkerHandle>` so the App can call
+///   `set_focus` for priority steering, while a coordinator
+///   thread also holds an `Arc` to wait for workers + finalise.
+/// - `coordinator`: a `JoinHandle<()>` for the thread that waits
+///   on the walker and emits the terminal `Complete` event.
 pub struct ScanHandle {
     /// Receiver of [`ScanEvent`]s. Drain via `try_recv` from the UI loop.
     pub rx: Receiver<ScanEvent>,
@@ -89,379 +103,95 @@ pub struct ScanHandle {
     pub live: Arc<Mutex<TreeArena>>,
     /// Cooperative cancellation flag. When set to `true` (e.g. by
     /// the user pressing `q` mid-scan, or by `start_scan` being
-    /// called again to re-scan a different path), the walker
-    /// notices on its next iteration and exits without sending a
-    /// final `Complete` event. The flag is also raised by
-    /// [`ScanHandle::Drop`] so the worker stops walking even if the
-    /// App forgets the handle.
+    /// called again to re-scan a different path), every walker
+    /// worker exits within microseconds.
     pub cancel: Arc<AtomicBool>,
-    handle: Option<JoinHandle<()>>,
+    walker: Option<Arc<WalkerHandle>>,
+    coordinator: Option<JoinHandle<()>>,
 }
 
 impl ScanHandle {
-    /// Signal the worker to stop and (best-effort) wait for it.
-    /// Reserved for callers that want deterministic teardown — none
-    /// of the current call sites need it (Drop's set-flag-and-detach
-    /// is enough for `q`, and a re-scan replaces the handle which
-    /// triggers the same Drop on the old one). Kept on the public
-    /// surface so future code (e.g. tests, integration harnesses)
-    /// can wait for a clean exit.
+    /// Tell the walker to prioritise this subtree. The next time
+    /// any worker pops a directory, dirs under `path` will jump to
+    /// the front of the priority queue. Existing queue entries are
+    /// re-prioritised in place.
+    ///
+    /// No-op when the walker has already finished (i.e. all workers
+    /// have exited and only the coordinator is winding down).
+    pub fn set_focus(&self, path: PathBuf) {
+        if let Some(w) = self.walker.as_ref() {
+            w.set_focus(path);
+        }
+    }
+
+    /// Signal the worker to stop and wait for the coordinator
+    /// thread to finish. Reserved for callers that want
+    /// deterministic teardown (tests). Drop's set-flag-and-detach
+    /// is enough for the App's `q` flow.
     #[allow(dead_code)]
     pub fn cancel_and_wait(&mut self) {
         self.cancel.store(true, Ordering::Relaxed);
-        if let Some(handle) = self.handle.take() {
-            let _ = handle.join();
+        if let Some(w) = self.walker.as_ref() {
+            w.join();
+        }
+        if let Some(c) = self.coordinator.take() {
+            let _ = c.join();
         }
     }
 }
 
 impl Drop for ScanHandle {
-    /// Set the cancellation flag and *detach* the worker thread.
-    ///
-    /// Pre-Phase-22 the Drop impl called `handle.join()`, which on a
-    /// huge tree (the user's 247 GB / 2.1M-file `~`) blocked process
-    /// teardown for the rest of the walk after the user pressed `q`.
-    /// The terminal was already restored at that point, so the user
-    /// saw a hung shell.
-    ///
-    /// Now we just raise the flag and forget the JoinHandle. The
-    /// worker reads `cancel` on every iteration and exits within
-    /// microseconds, and any straggler is reaped by the OS at
-    /// process exit. We don't leak the thread for the App's
-    /// lifetime — re-scan goes through `cancel_and_wait` if it
-    /// needs deterministic teardown.
+    /// Set the cancellation flag and *detach* both the walker
+    /// and the coordinator. Workers see the flag on their next
+    /// iteration and exit within microseconds; the coordinator's
+    /// `walker.join()` returns immediately once they do, then it
+    /// either sends `Complete` or short-circuits on the cancel
+    /// flag. The OS reaps any straggler at process exit.
     fn drop(&mut self) {
         self.cancel.store(true, Ordering::Relaxed);
-        // Drop the JoinHandle without joining; the OS reaps the
-        // worker on process exit, and the cancel flag is what
-        // actually unblocks responsiveness.
-        let _ = self.handle.take();
+        let _ = self.walker.take();
+        let _ = self.coordinator.take();
     }
 }
 
-/// Spawn a streaming scan rooted at `path`. The walker runs on its own
-/// thread and uses jwalk's default rayon thread-pool for parallel I/O.
-///
-/// The returned [`ScanHandle::live`] is the *same* `Arc<Mutex<TreeArena>>`
-/// the walker writes into — readers should `try_lock()` it (never
-/// `lock()`) to keep mid-scan rendering non-blocking.
+/// Spawn a streaming scan rooted at `path`. Returns a handle whose
+/// `rx` carries [`ScanEvent`]s, whose `live` arena is shared with
+/// the walker for mid-scan rendering, and whose `set_focus` method
+/// reorders the walker's priority queue at runtime.
 pub fn scan_streaming(path: &Path, config: &ScanConfig) -> ScanHandle {
     let (tx, rx) = mpsc::channel();
     let path = path.to_path_buf();
     let config = config.clone();
     let live = Arc::new(Mutex::new(TreeArena::new()));
     let cancel = Arc::new(AtomicBool::new(false));
-    let live_for_worker = Arc::clone(&live);
-    let cancel_for_worker = Arc::clone(&cancel);
-    let handle = thread::spawn(move || {
-        run(&path, &config, &tx, &live_for_worker, &cancel_for_worker);
+
+    let walker = Arc::new(walker::spawn_walker(
+        path,
+        config,
+        Arc::clone(&live),
+        Arc::clone(&cancel),
+        tx.clone(),
+    ));
+
+    // Coordinator thread: waits for every worker to exit, then
+    // emits the terminal `Complete` event. Lives in its own thread
+    // so the App's `update_scan_progress` poll never blocks on
+    // walker join.
+    let walker_for_coord = Arc::clone(&walker);
+    let live_for_coord = Arc::clone(&live);
+    let cancel_for_coord = Arc::clone(&cancel);
+    let coordinator = thread::spawn(move || {
+        walker_for_coord.join();
+        walker::finalise(&live_for_coord, &tx, &cancel_for_coord);
     });
+
     ScanHandle {
         rx,
         live,
         cancel,
-        handle: Some(handle),
+        walker: Some(walker),
+        coordinator: Some(coordinator),
     }
-}
-
-/// Compile a [`GlobSet`] from the user's exclude patterns. Returns
-/// `None` when the pattern list is empty (so the matcher cost is
-/// completely skipped on the hot path). Patterns that fail to parse
-/// are reported as warnings and skipped — we never abort a scan over
-/// a malformed glob.
-fn build_exclude_set(patterns: &[String], tx: &Sender<ScanEvent>) -> Option<GlobSet> {
-    if patterns.is_empty() {
-        return None;
-    }
-    let mut builder = GlobSetBuilder::new();
-    let mut added = 0usize;
-    for pat in patterns {
-        match Glob::new(pat) {
-            Ok(g) => {
-                builder.add(g);
-                added += 1;
-            }
-            Err(e) => {
-                let _ = tx.send(ScanEvent::Warning(format!(
-                    "ignoring invalid exclude pattern {:?}: {}",
-                    pat, e
-                )));
-            }
-        }
-    }
-    if added == 0 {
-        return None;
-    }
-    match builder.build() {
-        Ok(set) => Some(set),
-        Err(e) => {
-            let _ = tx.send(ScanEvent::Warning(format!(
-                "exclude pattern compilation failed: {}",
-                e
-            )));
-            None
-        }
-    }
-}
-
-/// Compute the size of an entry from an already-acquired
-/// [`std::fs::Metadata`]. Phase 24 split the syscall (one
-/// `std::fs::metadata` per file) from the size policy decision, so
-/// the walker can read `metadata` exactly once and feed it to both
-/// the size and inode-dedup paths instead of stat-ing the same file
-/// twice. On a 2M-file scan that halves the syscall count for the
-/// hot path — visibly faster, especially on cold caches.
-///
-/// When `apparent` is `false` (default) the on-disk size is used:
-/// `st_blocks * 512` on Unix, falling back to the apparent length
-/// when the block count is zero or unavailable. This matches `du`
-/// and FileLight.
-///
-/// When `apparent` is `true` the byte count from `metadata.len()`
-/// is returned directly — what `ls -l` shows. Useful for sparse
-/// files, transparently-compressed filesystems, and CoW snapshots
-/// where the on-disk number is misleading.
-fn size_from_metadata(metadata: &std::fs::Metadata, apparent: bool) -> u64 {
-    if apparent {
-        return metadata.len();
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        let blocks = metadata.blocks();
-        if blocks > 0 {
-            return blocks * 512;
-        }
-    }
-    metadata.len()
-}
-
-/// Walker entrypoint, shared-arena variant (Phase 21).
-///
-/// Writes directly into `shared` so the App can `try_lock()` the same
-/// `Arc<Mutex<TreeArena>>` from the render loop and draw a partial
-/// radial / sidebar while the scan is still running. This is what
-/// makes huge scans feel responsive: the user sees the biggest
-/// folders fill in (radial sorts size-desc, so they grow into the
-/// largest slices first) instead of staring at "Scanning..." for a
-/// minute.
-///
-/// Locking discipline
-/// - One lock acquisition per filesystem entry (folder insert, file
-///   insert + ancestor-size walk). The ancestor-walk runs inside the
-///   same lock so the size view is always self-consistent.
-/// - Lock is released between entries so the App's `try_lock` at
-///   render time has a high chance of succeeding without blocking
-///   the walker.
-/// - At ~30ns per uncontended lock and 2M files, the lock overhead
-///   is ~60ms total — invisible against the scan's wall-clock cost.
-///
-/// On completion the shared arena is cloned once into the
-/// `ScanEvent::Complete` payload. The clone is a one-time O(n) cost
-/// and unblocks the App from holding the live `Arc` after it has
-/// taken ownership.
-fn run(
-    root_path: &Path,
-    config: &ScanConfig,
-    tx: &Sender<ScanEvent>,
-    shared: &Arc<Mutex<TreeArena>>,
-    cancel: &Arc<AtomicBool>,
-) {
-    // Seed the shared arena with the root folder.
-    let root_id = {
-        let root_name = root_path
-            .file_name()
-            .unwrap_or_else(|| std::ffi::OsStr::new("/"))
-            .to_string_lossy()
-            .into_owned();
-        let mut arena = shared.lock().unwrap();
-        let id = arena.add_folder(Folder {
-            file: File {
-                name: root_name,
-                size: 0,
-                parent: None,
-                path: root_path.to_path_buf(),
-                ..File::default()
-            },
-            children_files: Vec::new(),
-            children_folders: Vec::new(),
-            child_count: 0,
-        });
-        arena.set_root(id);
-        id
-    };
-
-    let mut path_to_folder: HashMap<PathBuf, FolderId> = HashMap::new();
-    path_to_folder.insert(root_path.to_path_buf(), root_id);
-
-    let mut seen_inodes: HashSet<(u64, u64)> = HashSet::new();
-    let mut files: u64 = 0;
-    let mut total_size: u64 = 0;
-    let mut last_emit = Instant::now();
-
-    // Build the exclude matcher up-front. Patterns are matched against
-    // both the entry's full path and its base name so a user can write
-    // either `node_modules` or `**/node_modules/**`.
-    let exclude_set = build_exclude_set(&config.exclude, tx);
-
-    let walker = WalkDir::new(root_path)
-        .skip_hidden(false)
-        .follow_links(config.follow_symlinks)
-        .max_depth(config.max_depth.unwrap_or(usize::MAX))
-        .into_iter();
-
-    for entry in walker {
-        // Cooperative cancellation: bail out cleanly when the App
-        // signals (user pressed `q`, or a re-scan started). We do
-        // not send a Complete event in that case — `cancel_and_wait`
-        // / Drop semantics own the teardown.
-        if cancel.load(Ordering::Relaxed) {
-            return;
-        }
-        let entry = match entry {
-            Ok(e) => e,
-            Err(e) => {
-                // Non-fatal: surface and continue.
-                let _ = tx.send(ScanEvent::Warning(format!("{}", e)));
-                continue;
-            }
-        };
-
-        if let Some(err) = entry.read_children_error.as_ref() {
-            let _ = tx.send(ScanEvent::Warning(format!(
-                "{}: {}",
-                entry.path().display(),
-                err
-            )));
-        }
-
-        if entry.depth() == 0 {
-            continue;
-        }
-
-        let entry_path = entry.path();
-        let Some(parent_path) = entry_path.parent() else {
-            continue;
-        };
-        let Some(&parent_id) = path_to_folder.get(parent_path) else {
-            continue;
-        };
-
-        let file_type = entry.file_type();
-        if file_type.is_symlink() && !config.follow_symlinks {
-            continue;
-        }
-        if !file_type.is_file() && !file_type.is_dir() {
-            continue;
-        }
-
-        if let Some(set) = exclude_set.as_ref() {
-            let base_name = entry.file_name().to_string_lossy();
-            if set.is_match(&entry_path) || set.is_match(base_name.as_ref()) {
-                continue;
-            }
-        }
-
-        let name = entry.file_name().to_string_lossy().into_owned();
-
-        if file_type.is_dir() {
-            let folder_id = {
-                let mut arena = shared.lock().unwrap();
-                let id = arena.add_folder(Folder {
-                    file: File {
-                        name,
-                        size: 0,
-                        parent: Some(parent_id),
-                        path: entry_path.clone(),
-                        ..File::default()
-                    },
-                    children_files: Vec::new(),
-                    children_folders: Vec::new(),
-                    child_count: 0,
-                });
-                arena.folder_mut(parent_id).children_folders.push(id);
-                id
-            };
-            path_to_folder.insert(entry_path, folder_id);
-            continue;
-        }
-
-        // Regular file. Single metadata call: size + (on Unix)
-        // inode dedup + inode capture all read from the same
-        // `Metadata`. Pre-Phase-24 this path made two separate
-        // `std::fs::metadata` calls per file; on a 2M-file scan
-        // that's ~2M syscalls saved.
-        let metadata = match std::fs::metadata(&entry_path) {
-            Ok(m) => m,
-            Err(_) => continue,
-        };
-        let size = size_from_metadata(&metadata, config.use_apparent_size);
-
-        #[cfg(unix)]
-        let inode = {
-            use std::os::unix::fs::MetadataExt;
-            if !seen_inodes.insert((metadata.dev(), metadata.ino())) {
-                continue;
-            }
-            Some(metadata.ino())
-        };
-        #[cfg(not(unix))]
-        let inode: Option<u64> = None;
-
-        // One lock for: file insert + parent's children update +
-        // ancestor-size walk. Keeps the partial view self-consistent
-        // — readers never observe a file in `children_files` whose
-        // size hasn't been added to its ancestors.
-        {
-            let mut arena = shared.lock().unwrap();
-            let file_id = arena.add_file(File {
-                name,
-                size,
-                parent: Some(parent_id),
-                path: entry_path.clone(),
-                inode,
-            });
-            arena.folder_mut(parent_id).children_files.push(file_id);
-
-            let mut cursor = Some(parent_id);
-            while let Some(id) = cursor {
-                let folder = arena.folder_mut(id);
-                folder.file.size += size;
-                cursor = folder.file.parent;
-            }
-        }
-
-        files += 1;
-        total_size += size;
-
-        if last_emit.elapsed() >= PROGRESS_INTERVAL {
-            let _ = tx.send(ScanEvent::Progress {
-                files,
-                total_size,
-                current: Some(entry_path),
-            });
-            last_emit = Instant::now();
-        }
-    }
-
-    // Finalise child_count for every folder. Single lock over the
-    // whole pass — the scan is over so contention with the App's
-    // render loop no longer matters.
-    {
-        let mut arena = shared.lock().unwrap();
-        let folder_count = arena.folders().len();
-        for idx in 0..folder_count {
-            let folder = arena.folder_mut(FolderId(idx));
-            folder.child_count =
-                (folder.children_files.len() + folder.children_folders.len()) as u32;
-        }
-    }
-
-    // Hand off ownership via a one-time clone. The App receives this
-    // and drops its reference to the shared `Arc` so post-scan reads
-    // are lock-free.
-    let final_arena = shared.lock().unwrap().clone();
-    let _ = tx.send(ScanEvent::Complete(Box::new(final_arena)));
 }
 
 #[cfg(test)]
@@ -469,7 +199,7 @@ mod tests {
     use super::*;
     use assert_fs::prelude::*;
     use assert_fs::TempDir;
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     /// Drain events until the terminal event arrives or the timeout elapses.
     fn drain_until_done(handle: &mut ScanHandle) -> (Vec<ScanEvent>, Option<TreeArena>) {
