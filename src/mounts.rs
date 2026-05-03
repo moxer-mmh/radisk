@@ -157,8 +157,11 @@ pub fn parse_proc_mounts(text: &str) -> Vec<MountInfo> {
         let mount_point = decode_mount_path(fields[1]);
         let fstype = fields[2].to_string();
 
-        // Mount points must be absolute paths.
-        if !mount_point.is_absolute() {
+        // Mount points must be absolute Unix paths. Use a literal '/'
+        // prefix check rather than `Path::is_absolute()`, which is
+        // OS-aware and returns false on Windows for `/foo` — that
+        // breaks parsing /proc/mounts samples in cross-platform tests.
+        if !fields[1].starts_with('/') {
             continue;
         }
         if PSEUDO_FSTYPES
