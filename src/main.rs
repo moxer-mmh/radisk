@@ -2,11 +2,13 @@ mod app;
 mod color;
 mod config;
 mod context_menu;
+mod delete;
 mod keybinds;
 mod radial;
 mod renderer;
 mod scanner;
 mod scanner_streaming;
+mod snapshot;
 mod tree;
 mod ui;
 mod views;
@@ -35,7 +37,7 @@ use std::{io, panic, path::PathBuf, time::Duration};
     )
 )]
 struct Cli {
-    /// Path to scan
+    /// Path to scan. Ignored when `--import` is set.
     #[arg(default_value = ".")]
     path: PathBuf,
 
@@ -56,6 +58,19 @@ struct Cli {
     /// config file.
     #[arg(long = "exclude", value_name = "PATTERN")]
     exclude: Vec<String>,
+
+    /// Write a snapshot of the completed scan to PATH and exit
+    /// without entering the TUI. Useful for archiving the state of a
+    /// large filesystem or sharing it with someone else for offline
+    /// analysis.
+    #[arg(long, value_name = "PATH")]
+    export: Option<PathBuf>,
+
+    /// Open an existing snapshot instead of scanning the filesystem.
+    /// `path` is ignored. Useful for inspecting an exported tree on a
+    /// machine without filesystem access to the original target.
+    #[arg(long, value_name = "PATH", conflicts_with = "export")]
+    import: Option<PathBuf>,
 }
 
 /// Restore terminal to usable state
@@ -85,14 +100,6 @@ impl Drop for TerminalGuard {
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    let path = cli
-        .path
-        .canonicalize()
-        .with_context(|| format!("failed to canonicalize {}", cli.path.display()))?;
-    if !path.is_dir() {
-        bail!("{} is not a directory", path.display());
-    }
-
     // Load config: explicit --config wins, else the platform default path
     // (which falls back to compiled-in defaults if missing). CLI flags
     // applied after loading override file values.
@@ -106,6 +113,40 @@ fn main() -> Result<()> {
     if !cli.exclude.is_empty() {
         cfg.scan.exclude.extend(cli.exclude);
     }
+
+    // --export PATH: scan headlessly and write a snapshot. No TUI.
+    if let Some(out) = cli.export.as_deref() {
+        return run_headless_export(&cli.path, &cfg, out);
+    }
+
+    // --import PATH: load a snapshot and open the TUI on it. The
+    // positional `path` is ignored; we keep it accepted because clap
+    // makes it required-by-default.
+    let import_arena = match cli.import.as_deref() {
+        Some(snap) => Some(snapshot::load(snap)?),
+        None => None,
+    };
+
+    // For scan mode (the default), validate the path up front so the
+    // user gets a clean error before we touch the terminal.
+    let (path, import_label) = if let Some(snap) = cli.import.as_deref() {
+        // The arena's stored root path is what the App should display.
+        let label = snap.display().to_string();
+        let path = import_arena
+            .as_ref()
+            .and_then(|a| a.root().map(|root| a.folder(root).file.path.clone()))
+            .unwrap_or_else(|| PathBuf::from("/"));
+        (path, Some(label))
+    } else {
+        let p = cli
+            .path
+            .canonicalize()
+            .with_context(|| format!("failed to canonicalize {}", cli.path.display()))?;
+        if !p.is_dir() {
+            bail!("{} is not a directory", p.display());
+        }
+        (p, None)
+    };
 
     // Setup panic hook to restore terminal
     let original_hook = panic::take_hook();
@@ -138,6 +179,9 @@ fn main() -> Result<()> {
 
     // Create app and run
     let mut app = App::new(path.clone(), cfg, term_width, term_height);
+    if let (Some(arena), Some(label)) = (import_arena, import_label) {
+        app.adopt_loaded_arena(arena, label);
+    }
     let result = run_app(&mut terminal, &mut app);
 
     // Proper restore sequence
@@ -152,6 +196,67 @@ fn main() -> Result<()> {
     std::mem::forget(_guard);
 
     result
+}
+
+/// Run a scan with no UI and write the resulting arena to `out`. Used
+/// by `--export` so users can snapshot huge filesystems on a
+/// headless box, then open the resulting `.radisk` file with
+/// `--import` on a workstation.
+fn run_headless_export(path: &std::path::Path, cfg: &Config, out: &std::path::Path) -> Result<()> {
+    use scanner_streaming::{scan_streaming, ScanEvent};
+
+    let canonical = path
+        .canonicalize()
+        .with_context(|| format!("failed to canonicalize {}", path.display()))?;
+    if !canonical.is_dir() {
+        bail!("{} is not a directory", canonical.display());
+    }
+
+    let scan_cfg = cfg.to_scan_config();
+    let handle = scan_streaming(&canonical, &scan_cfg);
+
+    eprintln!("scanning {} ...", canonical.display());
+
+    let mut last_files = 0u64;
+    let mut last_size = 0u64;
+    let arena = loop {
+        match handle.rx.recv().context("scanner channel closed early")? {
+            ScanEvent::Progress {
+                files, total_size, ..
+            } => {
+                last_files = files;
+                last_size = total_size;
+            }
+            ScanEvent::Warning(msg) => eprintln!("warn: {}", msg),
+            ScanEvent::Complete(arena) => break *arena,
+            ScanEvent::Failed(reason) => bail!("scan failed: {}", reason),
+        }
+    };
+
+    let bytes = snapshot::save(&arena, out)
+        .with_context(|| format!("failed to write snapshot {}", out.display()))?;
+    eprintln!(
+        "wrote {} ({} files, {} bytes scanned, {} bytes on disk)",
+        out.display(),
+        last_files.max(arena_file_count(&arena)),
+        last_size.max(arena_root_size(&arena)),
+        bytes
+    );
+    Ok(())
+}
+
+fn arena_file_count(arena: &tree::TreeArena) -> u64 {
+    arena
+        .root()
+        .map(|root| arena.total_file_count(root))
+        .unwrap_or(0)
+}
+
+fn arena_root_size(arena: &tree::TreeArena) -> u64 {
+    arena
+        .root()
+        .map(|root| arena.folder(root).file.size)
+        .unwrap_or(0)
 }
 
 fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()>
