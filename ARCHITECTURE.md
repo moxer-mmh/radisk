@@ -91,6 +91,8 @@ context_menu.rs is a small leaf consumed by app.rs.
 | `renderer` | Braille canvas painting + segment lookup | `radial`, `color` |
 | `ui` | ratatui layout, sidebar, help, status, confirm dialog, view dispatch | `app`, `radial`, `renderer`, `color`, `views` |
 | `views` | `View` enum (Radial, Tree), tree-view row builder + renderer | `app`, `tree` |
+| `delete` | `DeleteStrategy` (TrashPut, GioTrash, Permanent) detection + TOCTOU-checked delete | nothing internal |
+| `snapshot` | `.radisk` export/import (RDSK magic, u16 version, zstd+postcard arena) | `tree` |
 | `color` | Palette, gradients, HSL/Lab math | nothing internal |
 | `context_menu` | Right-click menu state | nothing internal |
 

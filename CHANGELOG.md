@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (Phase 6 — trash + snapshot export/import)
+- **Trash-aware deletes**. New `delete` module detects `trash-put`
+  (trash-cli) or `gio trash` at startup and routes deletes through
+  the first one found, falling back to a permanent
+  `std::fs::remove_*` only when neither is installed. The status bar
+  reports which strategy was used (`Deleted (trash-put): …` vs
+  `Deleted (permanent (no trash helper)): …`) so users always know
+  whether the action is recoverable.
+- The delete path now wraps `symlink_metadata` + an optional inode
+  TOCTOU check, so a path that has been swapped out from under the
+  user since the dialog opened is refused with a contextful error
+  instead of being silently followed.
+- **Snapshot export** via `--export PATH`. Runs the streaming scan
+  headlessly (no TUI), prints progress to stderr, and writes a
+  versioned `.radisk` file: 4-byte magic `RDSK`, 2-byte LE version,
+  zstd-compressed postcard arena. ~650× compression in practice
+  (1,846 files / 24 MiB on disk → 38 KiB snapshot in our smoke run).
+- **Snapshot import** via `--import PATH`. Skips the scan entirely
+  and opens the TUI on the loaded arena. Mutually exclusive with
+  `--export`. Useful for inspecting a tree on a machine without
+  filesystem access to the original target.
+- New `snapshot` module owns the wire format — magic + version
+  prefix means future radisk versions can refuse old snapshots with
+  a "upgrade radisk" error rather than misinterpreting them. Format
+  is documented in `docs/SNAPSHOT_FORMAT.md`.
+- 4 round-trip tests cover the happy path, missing-magic rejection
+  (with path in message), unknown-version rejection (with "upgrade
+  radisk" hint), and contextful errors when the destination is
+  unwritable.
+
 ### Added (Phase 5 — ncdu-parity features)
 - **Sort modes**: cycle the sidebar / tree-view ordering with the
   `cycle_sort` action (default chord: `Shift+S`). Available modes:
