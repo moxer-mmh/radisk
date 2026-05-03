@@ -60,6 +60,10 @@ pub struct App {
     /// space-mark several entries from the sidebar and delete them
     /// in one confirmation dialog.
     pub selected_paths: std::collections::HashSet<PathBuf>,
+    /// Cache of pacman ownership lookups, keyed by absolute path so
+    /// repeated queries on the same row are free. Populated lazily
+    /// by the `show_owner` action.
+    pub owner_cache: std::collections::HashMap<PathBuf, crate::pacman::Owner>,
     /// Currently active main-area view (radial, tree, …). Toggled by
     /// the `toggle_view` action.
     pub view: View,
@@ -138,6 +142,7 @@ impl App {
             keybinds,
             theme,
             selected_paths: std::collections::HashSet::new(),
+            owner_cache: std::collections::HashMap::new(),
             view: View::default(),
             sort_mode: SortMode::default(),
             delete_strategy: DeleteStrategy::detect(),
@@ -308,7 +313,34 @@ impl App {
                 self.selected_paths.clear();
                 self.status_message = format!("Cleared {} selection(s)", n);
             }
+            Action::ShowOwner => self.show_owner_for_current(),
         }
+    }
+
+    /// Look up (or recall from cache) the pacman package owning the
+    /// current sidebar entry and surface it in the status bar. No-op
+    /// when the sidebar is empty or pacman is unavailable.
+    fn show_owner_for_current(&mut self) {
+        let Some(arena) = self.arena.as_ref() else {
+            return;
+        };
+        let items = self.sidebar_items();
+        let Some(item) = items.get(self.sidebar_index) else {
+            return;
+        };
+        let path = match item {
+            TreeItem::File(id, _) => arena.file(*id).path.clone(),
+            TreeItem::Folder(id, _) => arena.folder(*id).file.path.clone(),
+        };
+        let owner = match self.owner_cache.get(&path) {
+            Some(cached) => cached.clone(),
+            None => {
+                let fresh = crate::pacman::query(&path);
+                self.owner_cache.insert(path.clone(), fresh.clone());
+                fresh
+            }
+        };
+        self.status_message = format!("{}: {}", path.display(), owner.label());
     }
 
     /// Toggle the current sidebar item in/out of `selected_paths`.

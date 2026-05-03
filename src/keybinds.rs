@@ -57,6 +57,9 @@ pub enum Action {
     DeleteSelected,
     /// Clear every entry from the multi-select set.
     ClearSelection,
+    /// Show the pacman package owner of the selected entry in the
+    /// status bar (Arch-only; no-op on other distros).
+    ShowOwner,
 }
 
 impl Action {
@@ -81,6 +84,7 @@ impl Action {
             Action::ToggleSelect => "toggle_select",
             Action::DeleteSelected => "delete_selected",
             Action::ClearSelection => "clear_selection",
+            Action::ShowOwner => "show_owner",
         }
     }
 
@@ -103,6 +107,7 @@ impl Action {
             "toggle_select" => Some(Action::ToggleSelect),
             "delete_selected" => Some(Action::DeleteSelected),
             "clear_selection" => Some(Action::ClearSelection),
+            "show_owner" => Some(Action::ShowOwner),
             _ => None,
         }
     }
@@ -128,6 +133,7 @@ impl Action {
             Action::ToggleSelect,
             Action::DeleteSelected,
             Action::ClearSelection,
+            Action::ShowOwner,
         ]
     }
 }
@@ -301,6 +307,10 @@ impl Keybinds {
             KeyModifiers::SHIFT,
             Action::ClearSelection,
         );
+
+        // Lowercase 'o' for "owner" — Arch users will recognise it
+        // as the pacman -Qo flag.
+        add(KeyCode::Char('o'), KeyModifiers::NONE, Action::ShowOwner);
 
         Self { map }
     }
