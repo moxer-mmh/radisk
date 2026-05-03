@@ -4,6 +4,7 @@ mod context_menu;
 mod radial;
 mod renderer;
 mod scanner;
+mod scanner_streaming;
 mod tree;
 mod ui;
 
