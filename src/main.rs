@@ -6,7 +6,7 @@ mod delete;
 mod diff;
 mod keybinds;
 mod mounts;
-mod pacman;
+mod ownership;
 mod picker;
 mod radial;
 mod renderer;

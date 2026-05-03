@@ -63,7 +63,7 @@ pub struct App {
     /// Cache of pacman ownership lookups, keyed by absolute path so
     /// repeated queries on the same row are free. Populated lazily
     /// by the `show_owner` action.
-    pub owner_cache: std::collections::HashMap<PathBuf, crate::pacman::Owner>,
+    pub owner_cache: std::collections::HashMap<PathBuf, crate::ownership::Owner>,
     /// Currently active main-area view (radial, tree, …). Toggled by
     /// the `toggle_view` action.
     pub view: View,
@@ -335,7 +335,7 @@ impl App {
         let owner = match self.owner_cache.get(&path) {
             Some(cached) => cached.clone(),
             None => {
-                let fresh = crate::pacman::query(&path);
+                let fresh = crate::ownership::query(&path);
                 self.owner_cache.insert(path.clone(), fresh.clone());
                 fresh
             }
