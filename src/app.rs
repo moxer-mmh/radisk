@@ -86,6 +86,14 @@ pub struct App {
     pub context_menu: ContextMenu,
     pub delete_path: Option<PathBuf>,
     pub delete_is_folder: bool,
+    /// Inode captured at scan time for the staged delete target, when
+    /// known. The delete path passes this to `delete::delete()` as a
+    /// TOCTOU guard — if the on-disk inode no longer matches when the
+    /// user confirms, the delete is refused with a clear error rather
+    /// than silently following the renamed path. `None` for folders
+    /// (we only capture inodes on files), for radial-map deletes
+    /// (the segment doesn't carry an inode), and on non-Unix builds.
+    pub delete_inode: Option<u64>,
     /// Currently highlighted choice in the delete confirmation dialog.
     /// `true` = Yes, `false` = No. Always initialised to `false` so a stray
     /// Enter keypress can never trigger an irreversible deletion.
@@ -131,6 +139,7 @@ impl App {
             context_menu: ContextMenu::new(),
             delete_path: None,
             delete_is_folder: false,
+            delete_inode: None,
             // Default to No: a destructive action requires deliberate input.
             delete_selected: false,
         }
@@ -282,18 +291,24 @@ impl App {
         if let Some(arena) = self.arena.as_ref() {
             let items = self.sidebar_items();
             if let Some(item) = items.get(self.sidebar_index) {
-                let (path, is_folder) = match item {
+                let (path, is_folder, inode) = match item {
                     TreeItem::File(id, _) => {
                         let file = arena.file(*id);
-                        (file.path.clone(), false)
+                        (file.path.clone(), false, file.inode)
                     }
                     TreeItem::Folder(id, _) => {
                         let folder = arena.folder(*id);
-                        (folder.file.path.clone(), true)
+                        // We don't currently capture folder inodes
+                        // (folders are recursive deletes; the
+                        // identity check is most meaningful for
+                        // single files). Pass None to opt out of the
+                        // TOCTOU guard for now.
+                        (folder.file.path.clone(), true, None)
                     }
                 };
                 self.delete_path = Some(path);
                 self.delete_is_folder = is_folder;
+                self.delete_inode = inode;
                 // Always reset highlight to No when opening the dialog.
                 self.delete_selected = false;
                 self.mode = AppMode::ConfirmDelete;
@@ -307,6 +322,10 @@ impl App {
                 if let Some(segment) = self.renderer.find_segment(map, &uuid) {
                     self.delete_path = Some(PathBuf::from(&segment.path));
                     self.delete_is_folder = segment.is_folder;
+                    // The segment doesn't carry an inode; the TOCTOU
+                    // guard only fires for sidebar-driven deletes
+                    // until renderer carries inode through too.
+                    self.delete_inode = None;
                     // Always reset highlight to No when opening the dialog.
                     self.delete_selected = false;
                     self.mode = AppMode::ConfirmDelete;
@@ -884,13 +903,8 @@ impl App {
     /// was trashed (recoverable) or permanently removed.
     fn execute_delete(&mut self) {
         if let Some(path) = self.delete_path.take() {
-            // We don't currently track inodes per-entry in the arena,
-            // so the inode TOCTOU guard is bypassed here. A future
-            // commit can capture the inode at scan time and pass it
-            // through, but the contextful error from `delete()` is
-            // already a strict improvement over the silent
-            // `remove_*().is_err()` branch the legacy path used.
-            match delete_path(&self.delete_strategy, &path, None) {
+            let expected_inode = self.delete_inode.take();
+            match delete_path(&self.delete_strategy, &path, expected_inode) {
                 Ok(()) => {
                     self.status_message = format!(
                         "Deleted ({}): {}",

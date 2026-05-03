@@ -47,12 +47,20 @@ pub struct FolderId(pub usize);
 
 /// A file entry in the tree
 #[allow(dead_code)]
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct File {
     pub name: String,
     pub size: u64,
     pub parent: Option<FolderId>,
     pub path: PathBuf,
+    /// Unix inode captured at scan time. `None` on non-Unix
+    /// platforms or when the metadata call failed. Used by the
+    /// delete path to refuse acting on a path that has been
+    /// swapped out from under the user since the dialog opened.
+    /// `#[serde(default)]` so older snapshots without this field
+    /// load cleanly with `inode = None`.
+    #[serde(default)]
+    pub inode: Option<u64>,
 }
 
 /// A folder entry in the tree
@@ -189,6 +197,7 @@ impl TreeArena {
             size: 0,
             parent: None,
             path: root_path.clone(),
+            ..Default::default()
         };
         let root_folder = Folder {
             file: root_file,
@@ -205,6 +214,7 @@ impl TreeArena {
             size: 1000,
             parent: Some(root_id),
             path: root_path.join("big.txt"),
+            ..Default::default()
         };
         let f1_id = arena.add_file(f1);
 
@@ -213,6 +223,7 @@ impl TreeArena {
             size: 100,
             parent: Some(root_id),
             path: root_path.join("small.txt"),
+            ..Default::default()
         };
         let f2_id = arena.add_file(f2);
 
@@ -223,6 +234,7 @@ impl TreeArena {
             size: 500,
             parent: Some(root_id),
             path: sub_path.clone(),
+            ..Default::default()
         };
         let sub_folder = Folder {
             file: sub_file,
@@ -237,6 +249,7 @@ impl TreeArena {
             size: 500,
             parent: Some(sub_id),
             path: sub_path.join("nested.txt"),
+            ..Default::default()
         };
         let f3_id = arena.add_file(f3);
 
@@ -312,6 +325,7 @@ mod tests {
             size: 1024,
             parent: None,
             path: PathBuf::from("/test.txt"),
+            ..Default::default()
         };
         assert_eq!(file.name, "test.txt");
         assert_eq!(file.size, 1024);
@@ -324,6 +338,7 @@ mod tests {
             size: 0,
             parent: None,
             path: PathBuf::from("/mydir"),
+            ..Default::default()
         };
         let folder = Folder {
             file,
@@ -345,6 +360,7 @@ mod tests {
             size: 100,
             parent: None,
             path: PathBuf::from("/a.txt"),
+            ..Default::default()
         };
         let fid = arena.add_file(file);
         assert_eq!(fid, FileId(0));
@@ -435,6 +451,7 @@ mod tests {
             size: 0,
             parent: None,
             path: PathBuf::from("/empty"),
+            ..Default::default()
         };
         let folder = Folder {
             file,

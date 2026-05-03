@@ -121,6 +121,7 @@ pub fn scan_directory(path: &Path, config: &ScanConfig) -> Result<TreeArena, Sca
             size: 0,
             parent: None,
             path: path.to_path_buf(),
+            ..File::default()
         },
         children_files: Vec::new(),
         children_folders: Vec::new(),
@@ -222,6 +223,7 @@ fn scan_recursive(
                     size: 0,
                     parent: Some(parent_id),
                     path: item_path.clone(),
+                    ..File::default()
                 },
                 children_files: Vec::new(),
                 children_folders: Vec::new(),
@@ -252,6 +254,7 @@ fn scan_recursive(
                 size: item_size,
                 parent: Some(parent_id),
                 path: item_path.clone(),
+                ..File::default()
             };
             let file_id = arena.add_file(file);
 

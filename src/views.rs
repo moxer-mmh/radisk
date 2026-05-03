@@ -323,6 +323,7 @@ mod tests {
                 size: 0,
                 parent: None,
                 path: std::path::PathBuf::from("/"),
+                ..Default::default()
             },
             children_files: vec![],
             children_folders: vec![],
@@ -336,6 +337,7 @@ mod tests {
                 size: *size,
                 parent: Some(root),
                 path: std::path::PathBuf::from(name),
+                ..File::default()
             });
             arena.folder_mut(root).children_files.push(id);
         }
@@ -346,6 +348,7 @@ mod tests {
                     size: *size,
                     parent: Some(root),
                     path: std::path::PathBuf::from(name),
+                    ..Default::default()
                 },
                 children_files: vec![],
                 children_folders: vec![],
@@ -436,6 +439,7 @@ mod tests {
                 size: 0,
                 parent: None,
                 path: PathBuf::from("/"),
+                ..Default::default()
             },
             children_files: vec![],
             children_folders: vec![],
@@ -448,6 +452,7 @@ mod tests {
                 size: *size,
                 parent: Some(root),
                 path: PathBuf::from(format!("/{}", name)),
+                ..crate::tree::File::default()
             });
             arena.folder_mut(root).children_files.push(id);
         }

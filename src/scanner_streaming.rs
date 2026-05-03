@@ -190,6 +190,7 @@ fn run(root_path: &Path, config: &ScanConfig, tx: &Sender<ScanEvent>) {
             size: 0,
             parent: None,
             path: root_path.to_path_buf(),
+            ..File::default()
         },
         children_files: Vec::new(),
         children_folders: Vec::new(),
@@ -279,6 +280,7 @@ fn run(root_path: &Path, config: &ScanConfig, tx: &Sender<ScanEvent>) {
                     size: 0,
                     parent: Some(parent_id),
                     path: entry_path.clone(),
+                    ..File::default()
                 },
                 children_files: Vec::new(),
                 children_folders: Vec::new(),
@@ -293,21 +295,30 @@ fn run(root_path: &Path, config: &ScanConfig, tx: &Sender<ScanEvent>) {
         let size = entry_size(&entry_path, config.use_apparent_size);
 
         // Hard-link dedup on Unix: count each (dev, ino) once.
+        // We also remember the inode so the delete path can
+        // refuse to act on a path whose identity has changed
+        // between scan and the user's confirmation.
         #[cfg(unix)]
-        {
+        let inode = {
             use std::os::unix::fs::MetadataExt;
             if let Ok(metadata) = std::fs::metadata(&entry_path) {
                 if !seen_inodes.insert((metadata.dev(), metadata.ino())) {
                     continue;
                 }
+                Some(metadata.ino())
+            } else {
+                None
             }
-        }
+        };
+        #[cfg(not(unix))]
+        let inode: Option<u64> = None;
 
         let file_id = arena.add_file(File {
             name,
             size,
             parent: Some(parent_id),
             path: entry_path.clone(),
+            inode,
         });
         arena.folder_mut(parent_id).children_files.push(file_id);
 

@@ -584,6 +584,7 @@ mod tests {
             size: 1000,
             parent: None,
             path: std::path::PathBuf::from("/root"),
+            ..Default::default()
         };
         let root_folder = Folder {
             file: root_file,
@@ -599,6 +600,7 @@ mod tests {
             size: 1000,
             parent: Some(root_id),
             path: std::path::PathBuf::from("/root/big.txt"),
+            ..Default::default()
         };
         let fid = arena.add_file(file);
         arena.folder_mut(root_id).children_files.push(fid);

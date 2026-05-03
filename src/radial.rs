@@ -412,6 +412,7 @@ mod tests {
             size: count as u64 * size_each,
             parent: None,
             path: std::path::PathBuf::from("/root"),
+            ..Default::default()
         };
         let root_folder = Folder {
             file: root_file,
@@ -428,6 +429,7 @@ mod tests {
                 size: size_each,
                 parent: Some(root_id),
                 path: std::path::PathBuf::from(format!("/root/file{}.txt", i)),
+                ..Default::default()
             };
             let fid = arena.add_file(file);
             arena.folder_mut(root_id).children_files.push(fid);
@@ -444,6 +446,7 @@ mod tests {
             size: 1000,
             parent: None,
             path: std::path::PathBuf::from("/root"),
+            ..Default::default()
         };
         let root_folder = Folder {
             file: root_file,
@@ -459,6 +462,7 @@ mod tests {
             size: 1000,
             parent: Some(root_id),
             path: std::path::PathBuf::from("/root/big.txt"),
+            ..Default::default()
         };
         let fid = arena.add_file(file);
         arena.folder_mut(root_id).children_files.push(fid);
@@ -554,6 +558,7 @@ mod tests {
             size: 0,
             parent: None,
             path: std::path::PathBuf::from("/empty"),
+            ..Default::default()
         };
         let root_folder = Folder {
             file: root_file,
@@ -581,6 +586,7 @@ mod tests {
             size: 1100,
             parent: None,
             path: std::path::PathBuf::from("/root"),
+            ..Default::default()
         };
         let root_folder = Folder {
             file: root_file,
@@ -597,6 +603,7 @@ mod tests {
             size: 1000,
             parent: Some(root_id),
             path: std::path::PathBuf::from("/root/large.bin"),
+            ..Default::default()
         };
         let fid1 = arena.add_file(large);
         arena.folder_mut(root_id).children_files.push(fid1);
@@ -606,6 +613,7 @@ mod tests {
             size: 100,
             parent: Some(root_id),
             path: std::path::PathBuf::from("/root/small.txt"),
+            ..Default::default()
         };
         let fid2 = arena.add_file(small);
         arena.folder_mut(root_id).children_files.push(fid2);
