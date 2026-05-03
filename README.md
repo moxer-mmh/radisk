@@ -105,9 +105,13 @@ radisk --help                       # full CLI surface
 | `r` | Rescan |
 | `d` | Delete (sends to trash if `trash-put` / `gio trash` is installed) |
 | `Tab` | Toggle focus (map ↔ sidebar) |
-| `v` | Toggle view (radial ↔ tree) |
+| `v` | Toggle view (radial ↔ tree ↔ largest-files) |
 | `Shift+S` | Cycle sort (size↓ → size↑ → name) |
 | `a` | Toggle apparent vs on-disk size (rescans) |
+| `Space` | Toggle item in/out of multi-select |
+| `Shift+D` | Delete every selected item (one confirm) |
+| `Shift+X` | Clear multi-select |
+| `o` | Show package owner (pacman/AUR/dpkg/rpm/apk + npm/pip/uv/cargo/flatpak/snap) |
 | `j` / `k` (or `↑` / `↓`) | Navigate up/down in sidebar |
 
 Every key in the table is rebindable from the config file — see below.
@@ -207,6 +211,8 @@ CI (GitHub Actions) runs all four on every push and pull request.
 | `delete`             | Trash-cli detection + TOCTOU-checked delete                   |
 | `snapshot`, `diff`   | `.radisk` export/import + folder-level diff                   |
 | `mounts`, `picker`   | Partition-style mount picker (`--mounts`)                     |
+| `theme`              | Hex / ANSI user-themable palette from `[colors]`              |
+| `ownership`          | Multi-PM ownership (pacman/AUR/dpkg/rpm/apk + npm/pip/cargo/flatpak/snap) |
 | `app`, `ui`          | Event loop, ratatui layout, status bar, dialogs               |
 
 Full detail in [`ARCHITECTURE.md`](ARCHITECTURE.md).

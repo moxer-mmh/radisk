@@ -96,6 +96,8 @@ context_menu.rs is a small leaf consumed by app.rs.
 | `diff` | Folder-level snapshot comparison (`folder_diff`, `format_diff`) | `tree` |
 | `mounts` | `/proc/mounts` parser + `statvfs` (Linux); pseudo-fs filter | `nix` (Linux only) |
 | `picker` | Pre-scan partition-style mount picker (ratatui) | `mounts`, `tree` |
+| `theme` | `Role` enum + hex/ansi palette from `[colors]` | `config` |
+| `ownership` | Multi-PM ownership lookup: pacman/AUR, dpkg, rpm, apk; npm/pip/uv/cargo/flatpak/snap path patterns | `OnceLock` for caches |
 | `color` | Palette, gradients, HSL/Lab math | nothing internal |
 | `context_menu` | Right-click menu state | nothing internal |
 

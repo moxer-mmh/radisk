@@ -393,6 +393,22 @@ fn render_help(f: &mut Frame, app: &App) {
             Span::raw("Toggle apparent vs on-disk size (rescans)"),
         ]),
         Line::from(vec![
+            Span::styled("  Space      ", Style::default().fg(Color::White)),
+            Span::raw("Toggle item selection (multi-select)"),
+        ]),
+        Line::from(vec![
+            Span::styled("  Shift+D    ", Style::default().fg(Color::White)),
+            Span::raw("Delete every selected item (one confirm)"),
+        ]),
+        Line::from(vec![
+            Span::styled("  Shift+X    ", Style::default().fg(Color::White)),
+            Span::raw("Clear the multi-select set"),
+        ]),
+        Line::from(vec![
+            Span::styled("  o          ", Style::default().fg(Color::White)),
+            Span::raw("Show package owner (pacman/dpkg/rpm/apk + npm/pip/cargo/flatpak/snap)"),
+        ]),
+        Line::from(vec![
             Span::styled("  j/k        ", Style::default().fg(Color::White)),
             Span::raw("Navigate up/down in sidebar"),
         ]),

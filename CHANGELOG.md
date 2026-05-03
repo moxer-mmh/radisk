@@ -7,6 +7,74 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (Phase 15 — multi-PM ownership lookup)
+Inspired by Revo Uninstaller's "leftovers detection". Generalises the
+Phase 13 pacman lookup into a cross-ecosystem `ownership` module that
+covers most ways a Linux system acquires files.
+
+- **System package managers** (one fork per query, cached): pacman
+  (with AUR distinction via `pacman -Qm`), dpkg (Debian/Ubuntu), rpm
+  (Fedora/RHEL/openSUSE), apk (Alpine).
+- **Userspace ecosystems** (zero-cost path-pattern detection):
+  - npm   → `**/node_modules/<pkg>/...` (handles `@scope/pkg`)
+  - pip / uv → `**/site-packages/<pkg>/...` and `<pkg>-<ver>.dist-info`
+  - cargo → `~/.cargo/registry/src/<index>/<pkg>-<ver>/...`
+  - flatpak → `/var/lib/flatpak/app/<id>/...` and the user variant
+  - snap  → `/snap/<pkg>/...` and `name_revision.snap` archives
+- AUR packages get a visible `(aur)` tag in the status bar.
+- 15 unit tests cover every detector and parser without requiring
+  any package manager to be installed on the test host.
+
+### Added (Phase 14 — man page)
+- Hidden `--gen-man` CLI flag renders the clap-derived radisk(1) man
+  page on stdout for packagers' build scripts.
+
+### Added (Phase 13 — package-ownership annotation)
+- New `o` keybind (action: `show_owner`) queries the package manager
+  for the file under the cursor. See Phase 15 for the multi-PM
+  expansion.
+
+### Added (Phase 12 — multi-select + batch trash)
+Inspired by EaseUS / AOMEI / NIUBI's "select multiple, delete in one
+go" workflow.
+- `Space` toggles the current sidebar entry in/out of the
+  multi-select set.
+- `Shift+D` opens the existing confirm dialog for the whole batch.
+- `Shift+X` clears the selection.
+- Selected rows show a leading ✓ marker; toggle shows a running
+  count in the status bar.
+- Batch deletes route through the same trash-cli strategy as
+  single-target deletes; partial failures surface the first
+  failing path in the status message.
+
+### Added (Phase 11 — theme integration)
+Promotes the `[colors]` config section from "parsed but unused" into
+a live palette that drives sidebar text, selection highlight, and
+panel borders.
+- `Role` enum closes the set of paintable surfaces (foreground, file,
+  folder, selection_bg, border, border_focused, status).
+- `Theme::from_config` accepts `"#rrggbb"` true-colour hex and
+  `"ansi:N"` indexed palette values — wallust / pywal-friendly.
+- Unknown roles and malformed values become startup warnings rather
+  than aborting the App.
+- Defaults are bit-identical to the pre-Phase-11 hard-coded look —
+  overriding nothing changes nothing on screen.
+
+### Added (Phase 10 — inode TOCTOU closure)
+- `tree::File` gains an `inode: Option<u64>` field captured by the
+  streaming walker at scan time. The delete path passes it as the
+  `expected_inode` argument to `delete::delete()`, closing the
+  Phase 6-introduced TOCTOU guard for sidebar-driven file deletes.
+- `#[serde(default)]` keeps older `.radisk` snapshots loadable
+  with `inode = None`.
+
+### Added (Phase 9 — largest-files alt mode)
+Inspired by the partition tools' "what's eating my disk?" report.
+- New `View::Largest` joins the cycle, reachable with the existing
+  `v` chord. Order is now Radial → Tree → Largest → Radial.
+- Walks every file in the arena, takes the top 100 by size, renders
+  them as a flat list with bars scaled against the leader.
+
 ### Added (Phase 8 — partition-style mount picker)
 Inspired by the "select a disk" first screen of EaseUS Partition
 Master, MiniTool Partition Wizard, NIUBI Partition Editor, and

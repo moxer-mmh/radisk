@@ -72,7 +72,9 @@ use_apparent_size = false
 #   quit, help, navigate_up, navigate_into,
 #   zoom_in, zoom_out, rescan, delete,
 #   toggle_focus, move_up, move_down,
-#   toggle_view, cycle_sort, toggle_apparent_size
+#   toggle_view, cycle_sort, toggle_apparent_size,
+#   toggle_select, delete_selected, clear_selection,
+#   show_owner
 [keybinds]
 # quit                 = "ctrl+q"
 # help                 = "?"
@@ -85,19 +87,27 @@ use_apparent_size = false
 # toggle_focus         = "tab"
 # move_up              = "k"
 # move_down            = "j"
-# toggle_view          = "v"          # cycle radial / tree
+# toggle_view          = "v"          # cycle radial / tree / largest
 # cycle_sort           = "shift+s"    # size↓ → size↑ → name → size↓
 # toggle_apparent_size = "a"          # apparent ↔ on-disk (rescans)
+# toggle_select        = "space"      # add/remove from multi-select
+# delete_selected      = "shift+d"    # batch delete every selected item
+# clear_selection      = "shift+x"    # drop the multi-select set
+# show_owner           = "o"          # query package ownership in status bar
 
 
 # ─── Colors ─────────────────────────────────────────────────────────────
-# Reserved for upcoming theme integration (Phase 3.1). The section is
-# already parsed and validated, so configs written today will keep
-# working when the renderer starts honouring these keys.
+# Hex (#rrggbb, true colour) or ansi:N (0..=255 indexed palette) per
+# role. Indexed lets wallust/pywal users have radisk follow their
+# terminal-theme manager without restating every hex value.
 #
-# Planned syntax: `"#rrggbb"` for true-colour terminals, `"ansi:N"` for
-# fallback to a 0..=255 palette index (lets wallust/pywal users plug in
-# without recolouring their terminal).
+# Roles: foreground, file, folder, selection_bg, border,
+#        border_focused, status
 [colors]
-# file   = "#a0d8b3"
-# folder = "#3a8fb7"
+# foreground     = "#e0e0e0"
+# file           = "#a0d8b3"
+# folder         = "#3a8fb7"
+# selection_bg   = "ansi:8"
+# border         = "ansi:240"
+# border_focused = "#f5c542"
+# status         = "#cccccc"
