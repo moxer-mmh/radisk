@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (Phase 18 — docs sweep)
+- New `docs/KEYBINDS.md` — full chord/action dictionary, override
+  semantics, and a chord-DSL reference. README links to it from
+  the keybind table.
+- New `docs/CONFIG.md` — per-key configuration reference covering
+  `[display]`, `[scan]`, `[keybinds]`, `[colors]`, error handling,
+  and worked examples (wallust user, code-workstation excludes,
+  vim power-user).
+- New `CONTRIBUTING.md` — build commands, module map, commit
+  style (Conventional Commits), branching, perf-work expectations,
+  release flow.
+- README keybind table refreshed to lead with vim chords (`h`/
+  `l`/`gg`/`G`/`Ctrl-d/u`) alongside the arrow / Enter aliases,
+  and now points to `docs/KEYBINDS.md` and `docs/CONFIG.md` for
+  detail.
+
+### Added (Phase 17 — vim keybind aliases)
+- Single-key aliases: `h` / `←` (parent), `l` / `→` (descend).
+- New actions: `move_to_first` / `move_to_last` (default `gg` /
+  `G`), `move_half_page_down` / `move_half_page_up` (default
+  `Ctrl-d` / `Ctrl-u`).
+- Two-key `gg` sequence handled by a tiny `pending_g: bool` state
+  machine on App; non-`g` follow-ups clear the pending state.
+- Confirm dialog now toggles Yes/No on `h` / `l` / `Tab` too
+  (was: arrows / `j` / `k` only).
+- Help overlay closes on `q` / `Esc` / `?` / `Enter` only — any
+  other key is now ignored so users can't drop into a stale
+  state by mashing keys with help open.
+
 ### Added (Phase 15 — multi-PM ownership lookup)
 Inspired by Revo Uninstaller's "leftovers detection". Generalises the
 Phase 13 pacman lookup into a cross-ecosystem `ownership` module that

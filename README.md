@@ -94,25 +94,32 @@ radisk --help                       # full CLI surface
 
 ## Keyboard shortcuts
 
+vim users will feel at home — the bindings mirror Neovim's
+navigation muscle memory (`h`/`j`/`k`/`l`, `gg`/`G`, `Ctrl-d`/`Ctrl-u`)
+alongside the arrow / Enter equivalents.
+
 | Key | Action |
 | --- | --- |
-| `q` / `Esc` | Quit |
+| `q` / `Esc` | Quit (or close help/dialog) |
 | `?` | Show help overlay |
-| `u` / `Backspace` | Go to parent directory |
-| `Enter` | Open hovered folder |
-| `+` / `=` | Zoom in (more rings) |
-| `-` | Zoom out (fewer rings) |
+| `h` / `←` / `u` / `Backspace` | Go to parent directory |
+| `l` / `→` / `Enter` | Descend into hovered folder |
+| `j` / `↓` / `k` / `↑` | Navigate sidebar |
+| `gg` / `G` | Jump to first / last sidebar item |
+| `Ctrl-d` / `Ctrl-u` | Half-page down / up |
+| `+` / `=` / `-` | Zoom rings (in / in / out) |
 | `r` | Rescan |
 | `d` | Delete (sends to trash if `trash-put` / `gio trash` is installed) |
 | `Tab` | Toggle focus (map ↔ sidebar) |
-| `v` | Toggle view (radial ↔ tree ↔ largest-files) |
+| `v` | Cycle view (radial ↔ tree ↔ largest-files) |
 | `Shift+S` | Cycle sort (size↓ → size↑ → name) |
 | `a` | Toggle apparent vs on-disk size (rescans) |
 | `Space` | Toggle item in/out of multi-select |
 | `Shift+D` | Delete every selected item (one confirm) |
 | `Shift+X` | Clear multi-select |
-| `o` | Show package owner (pacman/AUR/dpkg/rpm/apk + npm/pip/uv/cargo/flatpak/snap) |
-| `j` / `k` (or `↑` / `↓`) | Navigate up/down in sidebar |
+| `o` | Show package owner (pacman/AUR + dpkg/rpm/apk + npm/pip/uv/cargo/flatpak/snap) |
+
+Every chord is rebindable — see [`docs/KEYBINDS.md`](docs/KEYBINDS.md).
 
 Every key in the table is rebindable from the config file — see below.
 
@@ -130,8 +137,11 @@ Every key in the table is rebindable from the config file — see below.
 RaDisk reads `$XDG_CONFIG_HOME/radisk/config.toml` (or the platform
 equivalent on macOS / Windows). Every key is optional; missing files
 fall back to compiled-in defaults; malformed files surface a parse
-error with file:line. A complete annotated example is shipped at
-[`docs/config.example.toml`](docs/config.example.toml).
+error with file:line.
+
+- Annotated reference: [`docs/config.example.toml`](docs/config.example.toml)
+- Per-key documentation: [`docs/CONFIG.md`](docs/CONFIG.md)
+- Keybind dictionary: [`docs/KEYBINDS.md`](docs/KEYBINDS.md)
 
 ```toml
 [display]
