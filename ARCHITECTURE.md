@@ -24,17 +24,38 @@ the source — it short-circuits a lot of reading.
 │ app.rs                                                    │
 │   App: state machine (AppMode), input handlers, sidebar,  │
 │   delete confirmation, navigation history, context menu   │
-│   dispatch. Holds the arena and the radial map.           │
+│   dispatch. Holds the arena, the radial map, and a        │
+│   ScanHandle whose channel is drained each frame.         │
 └───────────────────────────────────────────────────────────┘
-        │                          │                  │
-        ▼                          ▼                  ▼
-┌─────────────────┐    ┌─────────────────┐    ┌─────────────┐
-│ scanner.rs      │    │ tree.rs         │    │ ui.rs       │
-│ recursive walk, │    │ Arena (Vec-     │    │ ratatui     │
-│ st_blocks size, │    │ backed) of      │    │ layout +    │
-│ inode dedup,    │    │ File / Folder   │    │ sidebar +   │
-│ progress mpsc   │    │ nodes           │    │ help/dialog │
-└─────────────────┘    └─────────────────┘    └─────────────┘
+        │                  │                          │
+        │                  │                          ▼
+        │                  │                ┌─────────────┐
+        │                  │                │ ui.rs       │
+        │                  │                │ ratatui     │
+        │                  │                │ layout +    │
+        │                  │                │ sidebar +   │
+        │                  │                │ help/dialog │
+        │                  ▼                └─────────────┘
+        │        ┌─────────────────┐
+        │        │ tree.rs         │
+        │        │ Arena (Vec-     │
+        │        │ backed) of      │
+        │        │ File / Folder   │
+        │        │ nodes           │
+        │        └─────────────────┘
+        ▼
+┌──────────────────────────────────────────────────────────┐
+│ scanner_streaming.rs (production walker)                 │
+│   jwalk parallel walk on a worker thread; consumer       │
+│   thread builds the arena single-threaded; emits         │
+│   ScanEvent::{Progress, Warning, Complete, Failed} over  │
+│   std::mpsc to the App.                                  │
+│                                                          │
+│ scanner.rs (reference walker)                            │
+│   Single-threaded recursive walker kept for tests and    │
+│   as a portable fallback. Marked #[allow(dead_code)] in  │
+│   prod since the App no longer calls it.                 │
+└──────────────────────────────────────────────────────────┘
                                                     │
                                                     ▼
                                        ┌────────────────────────┐
