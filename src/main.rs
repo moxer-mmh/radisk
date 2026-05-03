@@ -5,6 +5,8 @@ mod context_menu;
 mod delete;
 mod diff;
 mod keybinds;
+mod mounts;
+mod picker;
 mod radial;
 mod renderer;
 mod scanner;
@@ -72,6 +74,13 @@ struct Cli {
     /// machine without filesystem access to the original target.
     #[arg(long, value_name = "PATH", conflicts_with = "export")]
     import: Option<PathBuf>,
+
+    /// Show a partition-style mount-point picker before scanning.
+    /// Lists every real (non-pseudo) filesystem with its used/free
+    /// space and lets the user pick which mount to scan. The
+    /// positional `path` is ignored when this flag is set.
+    #[arg(long, conflicts_with_all = ["export", "import"])]
+    mounts: bool,
 
     /// Optional subcommand. When present, the positional `path` and
     /// the `--export` / `--import` flags are ignored — the
@@ -155,16 +164,25 @@ fn main() -> Result<()> {
         None => None,
     };
 
-    // For scan mode (the default), validate the path up front so the
-    // user gets a clean error before we touch the terminal.
+    // For scan mode (the default), resolve which path to scan. Three
+    // sources, mutually exclusive:
+    //   - --import   : the arena's stored root, no canonicalize.
+    //   - --mounts   : deferred; we'll prompt after terminal setup.
+    //   - positional : canonicalize and require directory up front.
+    // Validating before touching the terminal means the user gets a
+    // clean error on stderr instead of a corrupted alt-screen.
     let (path, import_label) = if let Some(snap) = cli.import.as_deref() {
-        // The arena's stored root path is what the App should display.
         let label = snap.display().to_string();
         let path = import_arena
             .as_ref()
             .and_then(|a| a.root().map(|root| a.folder(root).file.path.clone()))
             .unwrap_or_else(|| PathBuf::from("/"));
         (path, Some(label))
+    } else if cli.mounts {
+        // The actual path is decided interactively below. Use a
+        // sentinel so anything that touches `path` before the picker
+        // runs is obviously wrong (we never construct App with this).
+        (PathBuf::from("/"), None)
     } else {
         let p = cli
             .path
@@ -204,6 +222,23 @@ fn main() -> Result<()> {
 
     // Get actual terminal size
     let (term_width, term_height) = size().unwrap_or((80, 24));
+
+    // If --mounts was passed, run the picker on the live terminal and
+    // promote its return value to the scan path. A cancelled picker
+    // is a clean exit, not an error.
+    let path = if cli.mounts {
+        match picker::run(&mut terminal)? {
+            picker::PickerOutcome::Picked(p) => p,
+            picker::PickerOutcome::Cancelled => {
+                let _ = terminal.clear();
+                restore_terminal();
+                std::mem::forget(_guard);
+                return Ok(());
+            }
+        }
+    } else {
+        path
+    };
 
     // Create app and run
     let mut app = App::new(path.clone(), cfg, term_width, term_height);
