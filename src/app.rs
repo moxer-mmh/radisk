@@ -1,6 +1,7 @@
 use crate::color::ColorConfig;
 use crate::config::Config;
 use crate::context_menu::{ContextMenu, MenuAction};
+use crate::delete::{delete as delete_path, DeleteStrategy};
 use crate::keybinds::{Action, Keybinds};
 use crate::radial::{build_radial_map, RadialConfig, RadialMap, Segment};
 use crate::renderer::{CanvasCoords, RadialRenderer};
@@ -57,6 +58,11 @@ pub struct App {
     /// by the `cycle_sort` action; the radial layout is always
     /// size-driven and ignores this.
     pub sort_mode: SortMode,
+    /// How `execute_delete` removes entries. Detected once at startup
+    /// (trash-put → gio trash → permanent rm) and reused for every
+    /// delete the user issues; surfaced in the status message so
+    /// users know whether the action was recoverable.
+    pub delete_strategy: DeleteStrategy,
     pub radial_map: Option<RadialMap>,
     pub renderer: RadialRenderer,
     pub hovered_uuid: Option<Uuid>,
@@ -107,6 +113,7 @@ impl App {
             keybinds,
             view: View::default(),
             sort_mode: SortMode::default(),
+            delete_strategy: DeleteStrategy::detect(),
             radial_map: None,
             renderer: RadialRenderer::new(ColorConfig::default()),
             hovered_uuid: None,
@@ -872,28 +879,31 @@ impl App {
         }
     }
 
-    /// Execute the pending delete operation
+    /// Execute the pending delete operation through the configured
+    /// [`DeleteStrategy`]. Status message reflects whether the entry
+    /// was trashed (recoverable) or permanently removed.
     fn execute_delete(&mut self) {
-        if let Some(ref path) = self.delete_path {
-            let path_buf = path.clone();
-            let is_folder = self.delete_is_folder;
-            if is_folder {
-                if let Err(e) = std::fs::remove_dir_all(&path_buf) {
-                    self.status_message = format!("Error: {}", e);
-                } else {
-                    self.status_message = format!("Deleted: {}", path.display());
+        if let Some(path) = self.delete_path.take() {
+            // We don't currently track inodes per-entry in the arena,
+            // so the inode TOCTOU guard is bypassed here. A future
+            // commit can capture the inode at scan time and pass it
+            // through, but the contextful error from `delete()` is
+            // already a strict improvement over the silent
+            // `remove_*().is_err()` branch the legacy path used.
+            match delete_path(&self.delete_strategy, &path, None) {
+                Ok(()) => {
+                    self.status_message = format!(
+                        "Deleted ({}): {}",
+                        self.delete_strategy.label(),
+                        path.display()
+                    );
                     self.start_scan();
                 }
-            } else {
-                if let Err(e) = std::fs::remove_file(&path_buf) {
-                    self.status_message = format!("Error: {}", e);
-                } else {
-                    self.status_message = format!("Deleted: {}", path.display());
-                    self.start_scan();
+                Err(e) => {
+                    self.status_message = format!("Delete failed: {:#}", e);
                 }
             }
         }
-        self.delete_path = None;
         self.mode = AppMode::Viewing;
     }
 
@@ -1006,6 +1016,22 @@ impl App {
             self.scan_handle = None;
             self.scan_current_path = None;
         }
+    }
+
+    /// Install a completed arena into the App state and switch to viewing.
+    /// Crate-public so `main` can drive an `--import` flow without
+    /// kicking off a scan: it constructs the App, calls
+    /// [`Self::adopt_loaded_arena`], and the event loop runs as if a
+    /// scan had just finished.
+    pub(crate) fn adopt_loaded_arena(&mut self, arena: TreeArena, source_label: String) {
+        self.scan_handle = None;
+        self.scan_progress = None;
+        self.scan_current_path = None;
+        self.install_completed_arena(arena);
+        // Override the standard "Scanned N files" message with one
+        // that calls out the snapshot path so users know the data is
+        // not live.
+        self.status_message = format!("Loaded snapshot: {}", source_label);
     }
 
     /// Install a completed arena into the App state and switch to viewing.
