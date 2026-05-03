@@ -30,6 +30,7 @@ use globset::{Glob, GlobSet, GlobSetBuilder};
 use jwalk::WalkDir;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
@@ -86,24 +87,55 @@ pub struct ScanHandle {
     /// same `Arc` and reads it via `try_lock()` to draw partial
     /// state mid-scan.
     pub live: Arc<Mutex<TreeArena>>,
+    /// Cooperative cancellation flag. When set to `true` (e.g. by
+    /// the user pressing `q` mid-scan, or by `start_scan` being
+    /// called again to re-scan a different path), the walker
+    /// notices on its next iteration and exits without sending a
+    /// final `Complete` event. The flag is also raised by
+    /// [`ScanHandle::Drop`] so the worker stops walking even if the
+    /// App forgets the handle.
+    pub cancel: Arc<AtomicBool>,
     handle: Option<JoinHandle<()>>,
 }
 
 impl ScanHandle {
-    /// Block until the worker thread finishes. Returns immediately if it has
-    /// already been joined.
-    pub fn join(&mut self) {
+    /// Signal the worker to stop and (best-effort) wait for it.
+    /// Reserved for callers that want deterministic teardown — none
+    /// of the current call sites need it (Drop's set-flag-and-detach
+    /// is enough for `q`, and a re-scan replaces the handle which
+    /// triggers the same Drop on the old one). Kept on the public
+    /// surface so future code (e.g. tests, integration harnesses)
+    /// can wait for a clean exit.
+    #[allow(dead_code)]
+    pub fn cancel_and_wait(&mut self) {
+        self.cancel.store(true, Ordering::Relaxed);
         if let Some(handle) = self.handle.take() {
-            // The worker thread is well-behaved (no panics, see `run`); a
-            // join failure here is non-fatal.
             let _ = handle.join();
         }
     }
 }
 
 impl Drop for ScanHandle {
+    /// Set the cancellation flag and *detach* the worker thread.
+    ///
+    /// Pre-Phase-22 the Drop impl called `handle.join()`, which on a
+    /// huge tree (the user's 247 GB / 2.1M-file `~`) blocked process
+    /// teardown for the rest of the walk after the user pressed `q`.
+    /// The terminal was already restored at that point, so the user
+    /// saw a hung shell.
+    ///
+    /// Now we just raise the flag and forget the JoinHandle. The
+    /// worker reads `cancel` on every iteration and exits within
+    /// microseconds, and any straggler is reaped by the OS at
+    /// process exit. We don't leak the thread for the App's
+    /// lifetime — re-scan goes through `cancel_and_wait` if it
+    /// needs deterministic teardown.
     fn drop(&mut self) {
-        self.join();
+        self.cancel.store(true, Ordering::Relaxed);
+        // Drop the JoinHandle without joining; the OS reaps the
+        // worker on process exit, and the cancel flag is what
+        // actually unblocks responsiveness.
+        let _ = self.handle.take();
     }
 }
 
@@ -118,13 +150,16 @@ pub fn scan_streaming(path: &Path, config: &ScanConfig) -> ScanHandle {
     let path = path.to_path_buf();
     let config = config.clone();
     let live = Arc::new(Mutex::new(TreeArena::new()));
+    let cancel = Arc::new(AtomicBool::new(false));
     let live_for_worker = Arc::clone(&live);
+    let cancel_for_worker = Arc::clone(&cancel);
     let handle = thread::spawn(move || {
-        run(&path, &config, &tx, &live_for_worker);
+        run(&path, &config, &tx, &live_for_worker, &cancel_for_worker);
     });
     ScanHandle {
         rx,
         live,
+        cancel,
         handle: Some(handle),
     }
 }
@@ -226,6 +261,7 @@ fn run(
     config: &ScanConfig,
     tx: &Sender<ScanEvent>,
     shared: &Arc<Mutex<TreeArena>>,
+    cancel: &Arc<AtomicBool>,
 ) {
     // Seed the shared arena with the root folder.
     let root_id = {
@@ -271,6 +307,13 @@ fn run(
         .into_iter();
 
     for entry in walker {
+        // Cooperative cancellation: bail out cleanly when the App
+        // signals (user pressed `q`, or a re-scan started). We do
+        // not send a Complete event in that case — `cancel_and_wait`
+        // / Drop semantics own the teardown.
+        if cancel.load(Ordering::Relaxed) {
+            return;
+        }
         let entry = match entry {
             Ok(e) => e,
             Err(e) => {
@@ -439,7 +482,7 @@ mod tests {
                 Err(mpsc::RecvTimeoutError::Disconnected) => break,
             }
         }
-        handle.join();
+        handle.cancel_and_wait();
         (events, arena)
     }
 

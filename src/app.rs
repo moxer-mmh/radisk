@@ -1249,6 +1249,27 @@ impl App {
         None
     }
 
+    /// Run `f` with whichever arena is currently authoritative —
+    /// the post-scan owned `arena` or, mid-scan, the live arena
+    /// shared with the walker via `try_lock`. Returns `None` only
+    /// when neither is available (no scan started yet, or the
+    /// walker holds the lock at this exact moment).
+    ///
+    /// The closure shape exists so render code reads everything it
+    /// needs (names, paths, sizes) under a *single* lock acquisition.
+    /// The naive alternative — `sidebar_items()` followed by per-row
+    /// `app.arena.as_ref()...` — does N+1 `try_lock`s per frame and
+    /// drops into the `"?"` placeholder for any row whose lock
+    /// happened to clash with the walker.
+    pub fn with_arena<R>(&self, f: impl FnOnce(&TreeArena) -> R) -> Option<R> {
+        if let Some(ref arena) = self.arena {
+            return Some(f(arena));
+        }
+        let handle = self.scan_handle.as_ref()?;
+        let arena = handle.live.try_lock().ok()?;
+        Some(f(&arena))
+    }
+
     /// Get segments for sidebar display, ordered by the user's
     /// currently-selected [`SortMode`]. Shared with the tree view so
     /// both surfaces stay consistent without duplicating the lookup.
@@ -1259,19 +1280,13 @@ impl App {
     /// A failed `try_lock` returns the empty list — the next frame
     /// will retry.
     pub fn sidebar_items(&self) -> Vec<crate::tree::TreeItem> {
-        if let Some(ref arena) = self.arena {
-            if let Some(root_id) = arena.root() {
-                return arena.folder_items_sorted(root_id, self.sort_mode);
-            }
-        }
-        if let Some(handle) = self.scan_handle.as_ref() {
-            if let Ok(arena) = handle.live.try_lock() {
-                if let Some(root_id) = arena.root() {
-                    return arena.folder_items_sorted(root_id, self.sort_mode);
-                }
-            }
-        }
-        Vec::new()
+        self.with_arena(|arena| {
+            arena
+                .root()
+                .map(|root| arena.folder_items_sorted(root, self.sort_mode))
+                .unwrap_or_default()
+        })
+        .unwrap_or_default()
     }
 
     /// Drain pending [`ScanEvent`]s from the streaming scan, if any. Called

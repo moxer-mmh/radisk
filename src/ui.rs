@@ -109,65 +109,88 @@ fn render_viewing(f: &mut Frame, app: &App) {
     }
 }
 
-/// Render sidebar with file list
+/// Render sidebar with file list.
+///
+/// All per-row data (name + path) is extracted under a single
+/// `app.with_arena(...)` closure so we acquire the live-arena lock
+/// at most once per frame instead of once per row. Pre-Phase-22
+/// the per-row lookup hit `app.arena` directly, which is `None`
+/// during scan — the user saw every row rendered as `[D] ? (size)`
+/// even though the radial showed real folders.
 fn render_sidebar(f: &mut Frame, app: &App, area: Rect) {
     use crate::theme::Role;
     let theme = &app.theme;
-    let items: Vec<ListItem> = app
-        .sidebar_items()
+
+    /// Pre-resolved row data — what the renderer actually needs.
+    struct Row {
+        name: String,
+        size: u64,
+        path: std::path::PathBuf,
+        is_folder: bool,
+    }
+
+    // Single arena lock for the whole row resolution. The walker
+    // is held off for the few microseconds this takes; readers
+    // never see a "?" placeholder again for a row that genuinely
+    // exists in the live arena.
+    let rows: Vec<Row> = app
+        .with_arena(|arena| {
+            let Some(root) = arena.root() else {
+                return Vec::new();
+            };
+            arena
+                .folder_items_sorted(root, app.sort_mode)
+                .into_iter()
+                .map(|item| match item {
+                    TreeItem::File(id, size) => {
+                        let f = arena.file(id);
+                        Row {
+                            name: f.name.clone(),
+                            size,
+                            path: f.path.clone(),
+                            is_folder: false,
+                        }
+                    }
+                    TreeItem::Folder(id, size) => {
+                        let f = arena.folder(id);
+                        Row {
+                            name: f.file.name.clone(),
+                            size,
+                            path: f.file.path.clone(),
+                            is_folder: true,
+                        }
+                    }
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let items: Vec<ListItem> = rows
         .iter()
         .enumerate()
-        .map(|(i, item)| {
-            let (icon, name, size_str, style) = match item {
-                TreeItem::File(id, s) => {
-                    let name = app
-                        .arena
-                        .as_ref()
-                        .map(|a| a.file(*id).name.clone())
-                        .unwrap_or_else(|| "?".to_string());
-                    let mut style = Style::default().fg(theme.color(Role::File));
-                    if i == app.sidebar_index {
-                        style = style.bg(theme.color(Role::SelectionBg));
-                    }
-                    if app.sidebar_hover_index == Some(i) {
-                        style = style.add_modifier(Modifier::UNDERLINED);
-                    }
-                    (" ", name, format_size(*s), style)
-                }
-                TreeItem::Folder(id, s) => {
-                    let name = app
-                        .arena
-                        .as_ref()
-                        .map(|a| a.folder(*id).file.name.clone())
-                        .unwrap_or_else(|| "?".to_string());
-                    let mut style = Style::default()
+        .map(|(i, row)| {
+            let (icon, mut style) = if row.is_folder {
+                (
+                    "[D]",
+                    Style::default()
                         .fg(theme.color(Role::Folder))
-                        .add_modifier(Modifier::BOLD);
-                    if i == app.sidebar_index {
-                        style = style.bg(theme.color(Role::SelectionBg));
-                    }
-                    if app.sidebar_hover_index == Some(i) {
-                        style = style.add_modifier(Modifier::UNDERLINED);
-                    }
-                    ("[D]", name, format_size(*s), style)
-                }
+                        .add_modifier(Modifier::BOLD),
+                )
+            } else {
+                (" ", Style::default().fg(theme.color(Role::File)))
             };
-            // Mark rows that are part of the multi-select set with
-            // a leading checkmark so users can see which entries
-            // would be hit by the next Shift+D.
-            let mark = {
-                let path = match item {
-                    TreeItem::File(id, _) => app.arena.as_ref().map(|a| a.file(*id).path.clone()),
-                    TreeItem::Folder(id, _) => {
-                        app.arena.as_ref().map(|a| a.folder(*id).file.path.clone())
-                    }
-                };
-                match path {
-                    Some(p) if app.selected_paths.contains(&p) => "✓",
-                    _ => " ",
-                }
+            if i == app.sidebar_index {
+                style = style.bg(theme.color(Role::SelectionBg));
+            }
+            if app.sidebar_hover_index == Some(i) {
+                style = style.add_modifier(Modifier::UNDERLINED);
+            }
+            let mark = if app.selected_paths.contains(&row.path) {
+                "✓"
+            } else {
+                " "
             };
-            let content = format!("{}{} {} ({})", mark, icon, name, size_str);
+            let content = format!("{}{} {} ({})", mark, icon, row.name, format_size(row.size));
             ListItem::new(content).style(style)
         })
         .collect();
