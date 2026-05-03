@@ -17,6 +17,7 @@ mod theme;
 mod tree;
 mod ui;
 mod views;
+mod walker;
 
 use anyhow::{bail, Context, Result};
 use app::App;

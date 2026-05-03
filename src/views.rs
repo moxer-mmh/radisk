@@ -14,13 +14,23 @@
 //! change — the toggle simply cycles through every variant.
 
 use crate::app::App;
-use crate::tree::{format_size, TreeArena, TreeItem};
+use crate::tree::{format_size, SizeMagnitude, TreeArena, TreeItem};
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, List, ListItem};
+use ratatui::widgets::{Block, BorderType, Borders, List, ListItem};
 use ratatui::Frame;
 use std::path::PathBuf;
+
+fn size_color(mag: SizeMagnitude) -> Color {
+    match mag {
+        SizeMagnitude::Tiny => Color::DarkGray,
+        SizeMagnitude::Small => Color::Gray,
+        SizeMagnitude::Medium => Color::Cyan,
+        SizeMagnitude::Large => Color::Yellow,
+        SizeMagnitude::Huge => Color::Red,
+    }
+}
 
 /// Which view is currently displayed in the main (non-sidebar) area.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -144,8 +154,12 @@ fn make_row(name: String, size: u64, is_folder: bool, scale: u64) -> TreeRow {
 /// keyboard navigation stay consistent across views.
 pub fn render_tree(f: &mut Frame, app: &App, area: Rect) {
     let Some(arena) = app.arena.as_ref() else {
-        let placeholder = ratatui::widgets::Paragraph::new("No data")
-            .block(Block::default().borders(Borders::ALL).title("Tree"));
+        let placeholder = ratatui::widgets::Paragraph::new("No data").block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
+                .title(" Tree "),
+        );
         f.render_widget(placeholder, area);
         return;
     };
@@ -157,15 +171,25 @@ pub fn render_tree(f: &mut Frame, app: &App, area: Rect) {
         .iter()
         .enumerate()
         .map(|(i, row)| {
+            let icon = if row.is_folder { "▸ " } else { "· " };
+            let size_fg = size_color(SizeMagnitude::classify(row.size));
             let mut spans = vec![
                 Span::styled(
                     format!("{:>5.1}% ", row.percent),
                     Style::default().fg(Color::DarkGray),
                 ),
-                Span::styled(format!("[{}] ", row.bar), Style::default().fg(Color::Cyan)),
+                Span::styled(format!("{} ", row.bar), Style::default().fg(size_fg)),
                 Span::styled(
                     format!("{:>10} ", row.size_label),
-                    Style::default().fg(Color::White),
+                    Style::default().fg(size_fg),
+                ),
+                Span::styled(
+                    icon,
+                    if row.is_folder {
+                        Style::default().fg(Color::LightCyan)
+                    } else {
+                        Style::default().fg(Color::DarkGray)
+                    },
                 ),
                 Span::styled(
                     row.name.clone(),
@@ -198,7 +222,13 @@ pub fn render_tree(f: &mut Frame, app: &App, area: Rect) {
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title(format!(" Tree: {} ", title)),
+                .border_type(BorderType::Rounded)
+                .title(Span::styled(
+                    format!(" ▸ Tree: {} ", title),
+                    Style::default()
+                        .fg(Color::LightCyan)
+                        .add_modifier(Modifier::BOLD),
+                )),
         )
         .style(Style::default().fg(Color::White));
 
@@ -263,16 +293,24 @@ pub fn build_largest_rows(arena: &TreeArena, limit: usize) -> Vec<LargestRow> {
 /// scoped and the global view spans folders).
 pub fn render_largest(f: &mut Frame, app: &App, area: Rect) {
     let Some(arena) = app.arena.as_ref() else {
-        let placeholder = ratatui::widgets::Paragraph::new("No data")
-            .block(Block::default().borders(Borders::ALL).title("Largest"));
+        let placeholder = ratatui::widgets::Paragraph::new("No data").block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
+                .title(" Largest "),
+        );
         f.render_widget(placeholder, area);
         return;
     };
 
     let rows = build_largest_rows(arena, LARGEST_LIMIT);
     if rows.is_empty() {
-        let placeholder = ratatui::widgets::Paragraph::new("No files in this tree")
-            .block(Block::default().borders(Borders::ALL).title(" Largest "));
+        let placeholder = ratatui::widgets::Paragraph::new("No files in this tree").block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
+                .title(" Largest "),
+        );
         f.render_widget(placeholder, area);
         return;
     }
@@ -281,16 +319,18 @@ pub fn render_largest(f: &mut Frame, app: &App, area: Rect) {
         .iter()
         .enumerate()
         .map(|(i, row)| {
+            let size_fg = size_color(SizeMagnitude::classify(row.size));
             let line = Line::from(vec![
                 Span::styled(
                     format!("{:>4} ", i + 1),
                     Style::default().fg(Color::DarkGray),
                 ),
-                Span::styled(format!("[{}] ", row.bar), Style::default().fg(Color::Cyan)),
+                Span::styled(format!("{} ", row.bar), Style::default().fg(size_fg)),
                 Span::styled(
                     format!("{:>10} ", row.size_label),
-                    Style::default().fg(Color::White),
+                    Style::default().fg(size_fg),
                 ),
+                Span::styled("· ", Style::default().fg(Color::DarkGray)),
                 Span::styled(
                     row.path.display().to_string(),
                     Style::default().fg(Color::White),
@@ -304,7 +344,13 @@ pub fn render_largest(f: &mut Frame, app: &App, area: Rect) {
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title(format!(" Largest {} files ", rows.len())),
+                .border_type(BorderType::Rounded)
+                .title(Span::styled(
+                    format!(" ▸ Largest {} files ", rows.len()),
+                    Style::default()
+                        .fg(Color::LightCyan)
+                        .add_modifier(Modifier::BOLD),
+                )),
         )
         .style(Style::default().fg(Color::White));
     f.render_widget(list, area);

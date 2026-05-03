@@ -116,6 +116,13 @@ pub struct App {
     /// sequence (currently only `gg` → jump to first item). Reset on
     /// any non-`g` keypress.
     pub pending_g: bool,
+    /// Currently focused folder within the arena — the "view root"
+    /// for the radial / sidebar. `None` falls through to the arena's
+    /// own root, which is the original scan target. Updated by
+    /// `navigate_into` / `navigate_up` so the user can browse the
+    /// arena without restarting the scan; the walker keeps running
+    /// in the background regardless of where the user has zoomed.
+    pub current_folder_id: Option<FolderId>,
 }
 
 impl App {
@@ -172,7 +179,25 @@ impl App {
             // Default to No: a destructive action requires deliberate input.
             delete_selected: false,
             pending_g: false,
+            current_folder_id: None,
         }
+    }
+
+    /// Resolve which folder is currently in focus — `current_folder_id`
+    /// when the user has explicitly zoomed in; otherwise the arena's
+    /// own root. Returns `None` only when no arena exists yet (early
+    /// startup, before the walker has even seeded the root).
+    pub fn focus_folder_id(&self, arena: &TreeArena) -> Option<FolderId> {
+        if let Some(id) = self.current_folder_id {
+            // Defend against a stale id from a snapshot that didn't
+            // round-trip with the current arena. The cloned post-scan
+            // arena keeps the same indices, so this `is_some` check
+            // really only fires after a snapshot import edge case.
+            if id.0 < arena.folders().len() {
+                return Some(id);
+            }
+        }
+        arena.root()
     }
 
     /// Kick off a streaming parallel scan of `current_path`. The walker runs
@@ -190,6 +215,10 @@ impl App {
         // instead of stale data when the user re-scans a different path.
         self.radial_map = None;
         self.arena = None;
+        // Reset zoom focus — a fresh scan rebuilds the arena from
+        // scratch, so any prior focus FolderId is meaningless.
+        self.current_folder_id = None;
+        self.sidebar_index = 0;
 
         let scan_config = self.config.to_scan_config();
         self.scan_handle = Some(scan_streaming(&self.current_path, &scan_config));
@@ -206,7 +235,7 @@ impl App {
         let Ok(arena) = handle.live.try_lock() else {
             return;
         };
-        let Some(root_id) = arena.root() else {
+        let Some(focus) = self.focus_folder_id(&arena) else {
             return;
         };
         let config = RadialConfig {
@@ -215,7 +244,7 @@ impl App {
             terminal_height: self.terminal_size.1,
             ..Default::default()
         };
-        self.radial_map = Some(build_radial_map(&arena, root_id, &config));
+        self.radial_map = Some(build_radial_map(&arena, focus, &config));
         self.canvas_coords = Some(CanvasCoords::new(
             self.terminal_size.0 as usize,
             self.terminal_size.1 as usize,
@@ -225,14 +254,14 @@ impl App {
     /// Rebuild the radial map from current state
     pub fn rebuild_map(&mut self) {
         if let Some(ref arena) = self.arena {
-            if let Some(root_id) = arena.root() {
+            if let Some(focus) = self.focus_folder_id(arena) {
                 let config = RadialConfig {
                     ring_depth: self.ring_depth,
                     terminal_width: self.terminal_size.0,
                     terminal_height: self.terminal_size.1,
                     ..Default::default()
                 };
-                self.radial_map = Some(build_radial_map(arena, root_id, &config));
+                self.radial_map = Some(build_radial_map(arena, focus, &config));
                 self.canvas_coords = Some(CanvasCoords::new(
                     self.terminal_size.0 as usize,
                     self.terminal_size.1 as usize,
@@ -251,8 +280,15 @@ impl App {
     pub fn handle_key(&mut self, key: KeyEvent) {
         match self.mode {
             AppMode::Scanning => {
-                if key.code == KeyCode::Esc || key.code == KeyCode::Char('q') {
-                    self.should_quit = true;
+                // Phase 23: full navigation works during scan. The
+                // walker keeps cataloguing in the background while
+                // the user clicks around the partial arena. Esc/q
+                // still quit, all other keys flow through the same
+                // dispatch as Viewing mode.
+                if self.context_menu.visible {
+                    self.handle_context_menu_key(key);
+                } else {
+                    self.handle_viewing_key(key);
                 }
             }
             AppMode::Viewing => {
@@ -1084,7 +1120,34 @@ impl App {
     }
 
     /// Navigate up to parent directory
+    /// Navigate up. If the current focus has a parent inside the
+    /// arena, just shift focus — no rescan, no work thrown away.
+    /// Only when we'd leave the arena root (the originally-scanned
+    /// path) do we fall back to a fresh scan rooted at the new
+    /// directory. This is what enables "go back, see your old
+    /// scan still there" without restarting.
     pub fn navigate_up(&mut self) {
+        // First, try to walk up inside the arena.
+        let in_arena_target = self.with_arena(|arena| {
+            let focus = self.focus_folder_id(arena)?;
+            let parent = arena.folder(focus).file.parent?;
+            let path = arena.folder(parent).file.path.clone();
+            Some((parent, path))
+        });
+        if let Some(Some((parent_id, path))) = in_arena_target {
+            self.nav_history.push(self.current_path.clone());
+            self.current_path = path.clone();
+            self.current_folder_id = Some(parent_id);
+            self.hovered_uuid = None;
+            self.renderer.set_hovered(None);
+            self.sidebar_index = 0;
+            self.rebuild_map();
+            self.notify_focus_change(path);
+            return;
+        }
+        // We're at the arena's root. Going further up means leaving
+        // the originally-scanned tree — that genuinely requires a
+        // fresh scan.
         if let Some(parent) = self.current_path.parent() {
             self.nav_history.push(self.current_path.clone());
             self.current_path = parent.to_path_buf();
@@ -1094,34 +1157,78 @@ impl App {
         }
     }
 
-    /// Navigate into a folder
+    /// Navigate into a folder by absolute path. Used by mouse
+    /// clicks and the context menu where only the path is known
+    /// (not a `FolderId`). When the path is inside the current
+    /// arena we shift focus without restarting; otherwise this
+    /// is a "navigate to a different tree" intent and triggers a
+    /// fresh scan.
     pub fn navigate_into(&mut self, path: PathBuf) {
-        if path.is_dir() {
+        if !path.is_dir() {
+            return;
+        }
+        let in_arena_id = self.with_arena(|arena| arena.find_folder_by_path(&path));
+        if let Some(Some(folder_id)) = in_arena_id {
             self.nav_history.push(self.current_path.clone());
-            self.current_path = path;
+            self.current_path = path.clone();
+            self.current_folder_id = Some(folder_id);
             self.hovered_uuid = None;
             self.renderer.set_hovered(None);
-            self.start_scan();
+            self.sidebar_index = 0;
+            self.rebuild_map();
+            self.notify_focus_change(path);
+            return;
+        }
+        // Path is outside the current arena — fall back to a fresh
+        // scan with this as the new root.
+        self.nav_history.push(self.current_path.clone());
+        self.current_path = path;
+        self.current_folder_id = None;
+        self.hovered_uuid = None;
+        self.renderer.set_hovered(None);
+        self.start_scan();
+    }
+
+    /// Fast in-arena navigation by `FolderId` — used by sidebar /
+    /// segment clicks where we already have the target's id and
+    /// don't need a path lookup at all.
+    fn navigate_into_id(&mut self, folder_id: FolderId) {
+        let path = self.with_arena(|arena| arena.folder(folder_id).file.path.clone());
+        let Some(path) = path else { return };
+        self.nav_history.push(self.current_path.clone());
+        self.current_path = path.clone();
+        self.current_folder_id = Some(folder_id);
+        self.hovered_uuid = None;
+        self.renderer.set_hovered(None);
+        self.sidebar_index = 0;
+        self.rebuild_map();
+        self.notify_focus_change(path);
+    }
+
+    /// Tell the running scan (if any) that the user has shifted
+    /// focus. The walker reorders its priority queue so dirs under
+    /// `path` jump to the front. If there's no active scan, the
+    /// call is a cheap no-op.
+    fn notify_focus_change(&self, path: PathBuf) {
+        if let Some(handle) = self.scan_handle.as_ref() {
+            handle.set_focus(path);
         }
     }
 
     /// Navigate into the currently hovered folder
     fn navigate_into_hovered(&mut self) {
-        // Always check sidebar selection first
+        // Sidebar wins. The selected item already has a FolderId,
+        // so route through navigate_into_id and skip the path
+        // round-trip.
         let items = self.sidebar_items();
-        if let Some(item) = items.get(self.sidebar_index) {
-            if item.is_folder() {
-                if let Some(ref arena) = self.arena {
-                    if let TreeItem::Folder(id, _) = item {
-                        let path = arena.folder(*id).file.path.clone();
-                        self.navigate_into(path);
-                        return;
-                    }
-                }
-            }
+        if let Some(TreeItem::Folder(id, _)) = items.get(self.sidebar_index).copied() {
+            self.navigate_into_id(id);
+            return;
         }
 
-        // Otherwise use map hover
+        // Map hover: segment carries a path string. Resolve it
+        // through the arena so we still get the FolderId fast-path
+        // inside `navigate_into`.
         if let Some(uuid) = self.hovered_uuid {
             if let Some(ref map) = self.radial_map {
                 if let Some(segment) = self.renderer.find_segment(map, &uuid) {
@@ -1216,7 +1323,7 @@ impl App {
         };
     }
 
-    /// Move hover up in sidebar
+    /// Move hover up in sidebar.
     fn move_hover_up(&mut self) {
         if self.sidebar_index > 0 {
             self.sidebar_index -= 1;
@@ -1225,17 +1332,20 @@ impl App {
         }
     }
 
-    /// Move hover down in sidebar
+    /// Move hover down in sidebar.
+    ///
+    /// Goes through `self.sidebar_items()` (which knows how to read
+    /// the live arena via `with_arena`). Pre-Phase-26 this read
+    /// `self.arena` directly — that field is `None` during a scan,
+    /// so `j` was a silent no-op until the scan completed even
+    /// though Phase 23 had already enabled navigation in
+    /// `Scanning` mode.
     fn move_hover_down(&mut self) {
-        if let Some(ref arena) = self.arena {
-            if let Some(root_id) = arena.root() {
-                let items = arena.folder_items(root_id);
-                if self.sidebar_index < items.len().saturating_sub(1) {
-                    self.sidebar_index += 1;
-                    self.sidebar_hover_index = Some(self.sidebar_index);
-                    self.sync_hover_to_canvas();
-                }
-            }
+        let n = self.sidebar_items().len();
+        if self.sidebar_index + 1 < n {
+            self.sidebar_index += 1;
+            self.sidebar_hover_index = Some(self.sidebar_index);
+            self.sync_hover_to_canvas();
         }
     }
 
@@ -1249,6 +1359,27 @@ impl App {
         None
     }
 
+    /// Run `f` with whichever arena is currently authoritative —
+    /// the post-scan owned `arena` or, mid-scan, the live arena
+    /// shared with the walker via `try_lock`. Returns `None` only
+    /// when neither is available (no scan started yet, or the
+    /// walker holds the lock at this exact moment).
+    ///
+    /// The closure shape exists so render code reads everything it
+    /// needs (names, paths, sizes) under a *single* lock acquisition.
+    /// The naive alternative — `sidebar_items()` followed by per-row
+    /// `app.arena.as_ref()...` — does N+1 `try_lock`s per frame and
+    /// drops into the `"?"` placeholder for any row whose lock
+    /// happened to clash with the walker.
+    pub fn with_arena<R>(&self, f: impl FnOnce(&TreeArena) -> R) -> Option<R> {
+        if let Some(ref arena) = self.arena {
+            return Some(f(arena));
+        }
+        let handle = self.scan_handle.as_ref()?;
+        let arena = handle.live.try_lock().ok()?;
+        Some(f(&arena))
+    }
+
     /// Get segments for sidebar display, ordered by the user's
     /// currently-selected [`SortMode`]. Shared with the tree view so
     /// both surfaces stay consistent without duplicating the lookup.
@@ -1259,19 +1390,12 @@ impl App {
     /// A failed `try_lock` returns the empty list — the next frame
     /// will retry.
     pub fn sidebar_items(&self) -> Vec<crate::tree::TreeItem> {
-        if let Some(ref arena) = self.arena {
-            if let Some(root_id) = arena.root() {
-                return arena.folder_items_sorted(root_id, self.sort_mode);
-            }
-        }
-        if let Some(handle) = self.scan_handle.as_ref() {
-            if let Ok(arena) = handle.live.try_lock() {
-                if let Some(root_id) = arena.root() {
-                    return arena.folder_items_sorted(root_id, self.sort_mode);
-                }
-            }
-        }
-        Vec::new()
+        self.with_arena(|arena| {
+            self.focus_folder_id(arena)
+                .map(|focus| arena.folder_items_sorted(focus, self.sort_mode))
+                .unwrap_or_default()
+        })
+        .unwrap_or_default()
     }
 
     /// Drain pending [`ScanEvent`]s from the streaming scan, if any. Called

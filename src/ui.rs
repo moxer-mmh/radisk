@@ -1,13 +1,36 @@
 use crate::app::{App, AppMode, Focus};
 use crate::color::center_color;
-use crate::tree::{format_size, TreeItem};
+use crate::tree::{format_size, SizeMagnitude, TreeItem};
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap},
+    widgets::{Block, BorderType, Borders, Clear, List, ListItem, Paragraph, Wrap},
     Frame,
 };
+
+/// Pick a foreground colour from a [`SizeMagnitude`] so the eye
+/// flags genuinely large entries without us having to add columns
+/// or chrome. Centralised so every size-rendering surface
+/// (sidebar, tree view, tooltip, status bar) agrees.
+fn size_color(mag: SizeMagnitude) -> Color {
+    match mag {
+        SizeMagnitude::Tiny => Color::DarkGray,
+        SizeMagnitude::Small => Color::Gray,
+        SizeMagnitude::Medium => Color::Cyan,
+        SizeMagnitude::Large => Color::Yellow,
+        SizeMagnitude::Huge => Color::Red,
+    }
+}
+
+/// Glyphs used across every list-style view. Kept as ASCII-fallback
+/// safe characters that still render on bare consoles; modern
+/// terminals draw them as expected.
+const ICON_FOLDER: &str = "▸";
+const ICON_FILE: &str = "·";
+const ICON_HOVER: &str = "▶";
+const ICON_SELECTED: &str = "✓";
+const ICON_BLANK: &str = " ";
 
 /// Main render function
 pub fn render(f: &mut Frame, app: &App) {
@@ -56,7 +79,17 @@ fn render_scanning(f: &mut Frame, app: &App) {
     };
 
     let progress = Paragraph::new(progress_text)
-        .block(Block::default().borders(Borders::ALL).title("Radisk"))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
+                .title(Line::from(Span::styled(
+                    " ▸ radisk ",
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                ))),
+        )
         .style(Style::default().fg(Color::Cyan))
         .wrap(Wrap { trim: true });
     f.render_widget(progress, chunks[0]);
@@ -109,66 +142,135 @@ fn render_viewing(f: &mut Frame, app: &App) {
     }
 }
 
-/// Render sidebar with file list
+/// Render sidebar with file list.
+///
+/// All per-row data (name + path) is extracted under a single
+/// `app.with_arena(...)` closure so we acquire the live-arena lock
+/// at most once per frame instead of once per row. Pre-Phase-22
+/// the per-row lookup hit `app.arena` directly, which is `None`
+/// during scan — the user saw every row rendered as `[D] ? (size)`
+/// even though the radial showed real folders.
 fn render_sidebar(f: &mut Frame, app: &App, area: Rect) {
     use crate::theme::Role;
     let theme = &app.theme;
-    let items: Vec<ListItem> = app
-        .sidebar_items()
+
+    /// Pre-resolved row data — what the renderer actually needs.
+    struct Row {
+        name: String,
+        size: u64,
+        path: std::path::PathBuf,
+        is_folder: bool,
+    }
+
+    // Single arena lock for the whole row resolution. The walker
+    // is held off for the few microseconds this takes; readers
+    // never see a "?" placeholder again for a row that genuinely
+    // exists in the live arena.
+    let rows: Vec<Row> = app
+        .with_arena(|arena| {
+            let Some(focus) = app.focus_folder_id(arena) else {
+                return Vec::new();
+            };
+            arena
+                .folder_items_sorted(focus, app.sort_mode)
+                .into_iter()
+                .map(|item| match item {
+                    TreeItem::File(id, size) => {
+                        let f = arena.file(id);
+                        Row {
+                            name: f.name.clone(),
+                            size,
+                            path: f.path.clone(),
+                            is_folder: false,
+                        }
+                    }
+                    TreeItem::Folder(id, size) => {
+                        let f = arena.folder(id);
+                        Row {
+                            name: f.file.name.clone(),
+                            size,
+                            path: f.file.path.clone(),
+                            is_folder: true,
+                        }
+                    }
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    // Reserve a right-hand column for the size so every row has a
+    // clean, aligned size column instead of "name (size)". Width
+    // scales with the panel; minimum 9 cells fits "999.9 GB".
+    let inner_w = area.width.saturating_sub(2) as usize;
+    let size_col = 10usize.min(inner_w.saturating_sub(6));
+    // Marker (1) + icon (1) + space (1) + size_col + space (1) =
+    // overhead. Name gets whatever's left.
+    let name_col = inner_w.saturating_sub(size_col + 4);
+
+    let items: Vec<ListItem> = rows
         .iter()
         .enumerate()
-        .map(|(i, item)| {
-            let (icon, name, size_str, style) = match item {
-                TreeItem::File(id, s) => {
-                    let name = app
-                        .arena
-                        .as_ref()
-                        .map(|a| a.file(*id).name.clone())
-                        .unwrap_or_else(|| "?".to_string());
-                    let mut style = Style::default().fg(theme.color(Role::File));
-                    if i == app.sidebar_index {
-                        style = style.bg(theme.color(Role::SelectionBg));
-                    }
-                    if app.sidebar_hover_index == Some(i) {
-                        style = style.add_modifier(Modifier::UNDERLINED);
-                    }
-                    (" ", name, format_size(*s), style)
-                }
-                TreeItem::Folder(id, s) => {
-                    let name = app
-                        .arena
-                        .as_ref()
-                        .map(|a| a.folder(*id).file.name.clone())
-                        .unwrap_or_else(|| "?".to_string());
-                    let mut style = Style::default()
-                        .fg(theme.color(Role::Folder))
-                        .add_modifier(Modifier::BOLD);
-                    if i == app.sidebar_index {
-                        style = style.bg(theme.color(Role::SelectionBg));
-                    }
-                    if app.sidebar_hover_index == Some(i) {
-                        style = style.add_modifier(Modifier::UNDERLINED);
-                    }
-                    ("[D]", name, format_size(*s), style)
-                }
+        .map(|(i, row)| {
+            // Marker in column 0: ▶ for hover, ✓ for selected,
+            // blank otherwise. Selection wins because it's the
+            // committed state.
+            let marker = if app.selected_paths.contains(&row.path) {
+                ICON_SELECTED
+            } else if app.sidebar_hover_index == Some(i) {
+                ICON_HOVER
+            } else {
+                ICON_BLANK
             };
-            // Mark rows that are part of the multi-select set with
-            // a leading checkmark so users can see which entries
-            // would be hit by the next Shift+D.
-            let mark = {
-                let path = match item {
-                    TreeItem::File(id, _) => app.arena.as_ref().map(|a| a.file(*id).path.clone()),
-                    TreeItem::Folder(id, _) => {
-                        app.arena.as_ref().map(|a| a.folder(*id).file.path.clone())
-                    }
-                };
-                match path {
-                    Some(p) if app.selected_paths.contains(&p) => "✓",
-                    _ => " ",
-                }
+
+            let icon = if row.is_folder {
+                ICON_FOLDER
+            } else {
+                ICON_FILE
             };
-            let content = format!("{}{} {} ({})", mark, icon, name, size_str);
-            ListItem::new(content).style(style)
+
+            // Truncate name to fit the column with a trailing
+            // ellipsis so long file names don't push the size off
+            // screen.
+            let name = if row.name.chars().count() > name_col {
+                let mut s: String = row.name.chars().take(name_col.saturating_sub(1)).collect();
+                s.push('…');
+                s
+            } else {
+                row.name.clone()
+            };
+
+            let name_style = if row.is_folder {
+                Style::default()
+                    .fg(theme.color(Role::Folder))
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(theme.color(Role::File))
+            };
+            let size_str = format_size(row.size);
+            let size_style = Style::default().fg(size_color(SizeMagnitude::classify(row.size)));
+
+            let mut spans = vec![
+                Span::styled(
+                    format!("{} ", marker),
+                    Style::default().fg(theme.color(Role::Folder)),
+                ),
+                Span::styled(format!("{} ", icon), name_style),
+                Span::styled(format!("{:<width$} ", name, width = name_col), name_style),
+                Span::styled(
+                    format!("{:>width$}", size_str, width = size_col),
+                    size_style,
+                ),
+            ];
+            // Selection cursor: paint the row background. No more
+            // UNDERLINED on hover — the leading ▶ marker carries
+            // the same information without the visual noise.
+            if i == app.sidebar_index {
+                let bg = theme.color(Role::SelectionBg);
+                for span in &mut spans {
+                    span.style = span.style.bg(bg);
+                }
+            }
+            ListItem::new(Line::from(spans))
         })
         .collect();
 
@@ -183,11 +285,28 @@ fn render_sidebar(f: &mut Frame, app: &App, area: Rect) {
     } else {
         theme.color(Role::Border)
     };
+    let title_line = Line::from(vec![
+        Span::raw(" "),
+        Span::styled(
+            "▸ ",
+            Style::default()
+                .fg(theme.color(Role::Folder))
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            title,
+            Style::default()
+                .fg(theme.color(Role::Foreground))
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(" "),
+    ]);
     let sidebar = List::new(items)
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title(format!(" {} ", title))
+                .border_type(BorderType::Rounded)
+                .title(title_line)
                 .border_style(Style::default().fg(border_color)),
         )
         .style(Style::default().fg(theme.color(Role::Foreground)));
@@ -201,8 +320,12 @@ fn render_radial_map(f: &mut Frame, app: &App, area: Rect) {
     use ratatui::widgets::canvas::Canvas;
 
     let Some(map) = app.radial_map.as_ref() else {
-        let placeholder =
-            Paragraph::new("No data").block(Block::default().borders(Borders::ALL).title("Map"));
+        let placeholder = Paragraph::new("No data").block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
+                .title(" Map "),
+        );
         f.render_widget(placeholder, area);
         return;
     };
@@ -232,15 +355,32 @@ fn render_radial_map(f: &mut Frame, app: &App, area: Rect) {
     let x_bound = max_radius;
     let y_bound = max_radius * aspect_ratio;
 
+    let title_line = Line::from(vec![
+        Span::raw(" "),
+        Span::styled(
+            "▸ ",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            app.current_path.display().to_string(),
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(" "),
+    ]);
     let canvas = Canvas::default()
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title(format!(" {} ", app.current_path.display()))
+                .border_type(BorderType::Rounded)
+                .title(title_line)
                 .border_style(if app.focus == Focus::Map {
                     Style::default().fg(Color::Yellow)
                 } else {
-                    Style::default()
+                    Style::default().fg(Color::DarkGray)
                 }),
         )
         .marker(Marker::Braille)
@@ -300,15 +440,45 @@ fn render_radial_map(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(label, text_area);
 }
 
-/// Render status bar
+/// Render status bar.
+///
+/// Two-row layout:
+/// - Row 0 = top border + status text. During scan the text leads
+///   with a small spinner glyph that advances with the file count
+///   so the user has a "still alive" cue even when the path
+///   suffix scrolls off.
+/// - Row 1 = compact key hints in dim grey.
 fn render_status_bar(f: &mut Frame, app: &App, area: Rect) {
-    let help_text = if app.hovered_uuid.is_some() {
-        "[u/Backspace] Up  [Enter] Open  [d] Delete  [+/-] Zoom  [r] Rescan  [?] Help  [q] Quit"
+    let scanning = matches!(app.mode, AppMode::Scanning);
+    let help_text = if scanning {
+        // Compact during scan — most keys are still wired (Phase
+        // 23) but advertise only the essentials so the bar fits.
+        "[h/l] In/Up  [j/k] Move  [v] View  [q] Quit"
+    } else if app.hovered_uuid.is_some() {
+        "[u/Backspace] Up  [Enter] Open  [d] Del  [+/-] Zoom  [r] Rescan  [?] Help  [q] Quit"
     } else {
-        "[h/l] Up/In  [j/k] Move  [d] Del  [+/-] Zoom  [r] Rescan  [Tab] Focus  [v] View  [S] Sort  [a] Apparent  [?] Help  [q] Quit"
+        "[h/l] In/Up  [j/k] Move  [d] Del  [+/-] Zoom  [r] Rescan  [Tab] Focus  [v] View  [S] Sort  [a] Apparent  [?] Help  [q] Quit"
+    };
+
+    // Spinner during scan — frame index keys off file count so the
+    // glyph advances with progress, not wall-clock.
+    let spinner_glyph = if scanning {
+        const FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+        let idx = app
+            .scan_progress
+            .as_ref()
+            .map(|p| (p.files_scanned / 32) as usize % FRAMES.len())
+            .unwrap_or(0);
+        FRAMES[idx]
+    } else {
+        "▸"
     };
 
     let status_line = Line::from(vec![
+        Span::styled(
+            format!("{} ", spinner_glyph),
+            Style::default().fg(if scanning { Color::Yellow } else { Color::Cyan }),
+        ),
         Span::styled(app.status_text(), Style::default().fg(Color::White)),
         Span::raw("  "),
         Span::styled(help_text, Style::default().fg(Color::DarkGray)),
@@ -336,6 +506,7 @@ fn render_tooltip(f: &mut Frame, text: &str) {
         .block(
             Block::default()
                 .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
                 .border_style(Style::default().fg(Color::Yellow)),
         )
         .style(Style::default().fg(Color::White).bg(Color::DarkGray))
@@ -439,6 +610,7 @@ fn render_help(f: &mut Frame, app: &App) {
         .block(
             Block::default()
                 .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
                 .title(" Help ")
                 .title_style(head_style)
                 .border_style(Style::default().fg(Color::White))
@@ -496,6 +668,7 @@ fn render_context_menu(f: &mut Frame, app: &App) {
         .block(
             Block::default()
                 .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
                 .title(format!(" {} ", menu.segment_name))
                 .border_style(Style::default().fg(Color::Yellow)),
         )
@@ -617,6 +790,7 @@ fn render_delete_confirmation(f: &mut Frame, app: &App) {
         .block(
             Block::default()
                 .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
                 .title(" Delete ")
                 .border_style(Style::default().fg(Color::Red)),
         )

@@ -81,6 +81,47 @@ const PSEUDO_FSTYPES: &[&str] = &[
     "selinuxfs",
 ];
 
+/// Discover *pseudo* mount points — `/proc`, `/sys`, `/dev`,
+/// `cgroup`, etc. — so the walker can skip them.
+///
+/// Phase 27 wires this into [`crate::walker`] to fix the
+/// `/proc/kcore reports 128 TB` bug: kcore is the kernel's
+/// virtual-memory image, exposed as a file in `/proc`. Its
+/// "size" is the kernel's address-space width, not real
+/// storage. Walking *any* file under a pseudo-FS gives
+/// nonsense numbers in a disk-usage tool.
+///
+/// On non-Linux platforms `/proc/mounts` doesn't exist; the
+/// hard-coded set is the safety net.
+pub fn pseudo_mount_points() -> std::collections::HashSet<PathBuf> {
+    let mut out: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
+    #[cfg(target_os = "linux")]
+    {
+        if let Ok(text) = std::fs::read_to_string("/proc/mounts") {
+            for line in text.lines() {
+                let fields: Vec<&str> = line.split_whitespace().collect();
+                if fields.len() < 6 {
+                    continue;
+                }
+                let fstype = fields[2];
+                if PSEUDO_FSTYPES
+                    .iter()
+                    .any(|p| p.eq_ignore_ascii_case(fstype))
+                {
+                    out.insert(decode_mount_path(fields[1]));
+                }
+            }
+        }
+    }
+    // Belt and braces on every platform: ensure the canonical
+    // pseudo dirs are skipped even if /proc/mounts was empty or
+    // unreadable.
+    for p in ["/proc", "/sys", "/dev", "/run"] {
+        out.insert(PathBuf::from(p));
+    }
+    out
+}
+
 /// Discover all "real" mount points on the current host. On Linux
 /// this parses `/proc/mounts`; everything else returns an empty list.
 pub fn discover() -> Vec<MountInfo> {
