@@ -1310,7 +1310,7 @@ impl App {
         };
     }
 
-    /// Move hover up in sidebar
+    /// Move hover up in sidebar.
     fn move_hover_up(&mut self) {
         if self.sidebar_index > 0 {
             self.sidebar_index -= 1;
@@ -1319,17 +1319,20 @@ impl App {
         }
     }
 
-    /// Move hover down in sidebar
+    /// Move hover down in sidebar.
+    ///
+    /// Goes through `self.sidebar_items()` (which knows how to read
+    /// the live arena via `with_arena`). Pre-Phase-26 this read
+    /// `self.arena` directly — that field is `None` during a scan,
+    /// so `j` was a silent no-op until the scan completed even
+    /// though Phase 23 had already enabled navigation in
+    /// `Scanning` mode.
     fn move_hover_down(&mut self) {
-        if let Some(ref arena) = self.arena {
-            if let Some(root_id) = arena.root() {
-                let items = arena.folder_items(root_id);
-                if self.sidebar_index < items.len().saturating_sub(1) {
-                    self.sidebar_index += 1;
-                    self.sidebar_hover_index = Some(self.sidebar_index);
-                    self.sync_hover_to_canvas();
-                }
-            }
+        let n = self.sidebar_items().len();
+        if self.sidebar_index + 1 < n {
+            self.sidebar_index += 1;
+            self.sidebar_hover_index = Some(self.sidebar_index);
+            self.sync_hover_to_canvas();
         }
     }
 
