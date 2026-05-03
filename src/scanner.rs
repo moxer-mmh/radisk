@@ -18,6 +18,17 @@ pub struct ScanConfig {
     /// Maximum recursion depth, counting from the scan root as 0. Defaults to
     /// [`DEFAULT_MAX_DEPTH`] to bound stack usage.
     pub max_depth: Option<usize>,
+    /// If `true` use the apparent size (`metadata.len()` — the byte
+    /// count the OS reports for the file) instead of the on-disk size
+    /// (`st_blocks * 512` on Unix). Apparent size is what `ls -l`
+    /// shows; on-disk size is what `du` shows. They diverge for sparse
+    /// files, files with holes, btrfs/zfs CoW data, and anything
+    /// stored in a filesystem with transparent compression. Default:
+    /// `false` (on-disk).
+    pub use_apparent_size: bool,
+    /// Glob/gitignore-style patterns to skip while walking.
+    /// Empty by default. Matched against each entry's full path.
+    pub exclude: Vec<String>,
 }
 
 impl Default for ScanConfig {
@@ -25,6 +36,8 @@ impl Default for ScanConfig {
         Self {
             follow_symlinks: false,
             max_depth: Some(DEFAULT_MAX_DEPTH),
+            use_apparent_size: false,
+            exclude: Vec::new(),
         }
     }
 }
@@ -452,8 +465,8 @@ mod tests {
         // and should appear as an empty folder, while `c/` and `d.txt` must
         // not be recorded.
         let config = ScanConfig {
-            follow_symlinks: false,
             max_depth: Some(1),
+            ..ScanConfig::default()
         };
         let arena = scan_directory(temp.path(), &config).unwrap();
         let root_id = arena.root().unwrap();

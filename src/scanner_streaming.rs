@@ -26,6 +26,7 @@
 
 use crate::scanner::ScanConfig;
 use crate::tree::{File, Folder, FolderId, TreeArena};
+use globset::{Glob, GlobSet, GlobSetBuilder};
 use jwalk::WalkDir;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -106,11 +107,61 @@ pub fn scan_streaming(path: &Path, config: &ScanConfig) -> ScanHandle {
     }
 }
 
-/// Compute the on-disk size of `path` using `st_blocks * 512` on Unix to
-/// match the legacy walker (which in turn matches `du` and FileLight). Falls
-/// back to the apparent length on non-Unix platforms or when the block count
-/// is unavailable.
-fn entry_size(path: &Path) -> u64 {
+/// Compile a [`GlobSet`] from the user's exclude patterns. Returns
+/// `None` when the pattern list is empty (so the matcher cost is
+/// completely skipped on the hot path). Patterns that fail to parse
+/// are reported as warnings and skipped — we never abort a scan over
+/// a malformed glob.
+fn build_exclude_set(patterns: &[String], tx: &Sender<ScanEvent>) -> Option<GlobSet> {
+    if patterns.is_empty() {
+        return None;
+    }
+    let mut builder = GlobSetBuilder::new();
+    let mut added = 0usize;
+    for pat in patterns {
+        match Glob::new(pat) {
+            Ok(g) => {
+                builder.add(g);
+                added += 1;
+            }
+            Err(e) => {
+                let _ = tx.send(ScanEvent::Warning(format!(
+                    "ignoring invalid exclude pattern {:?}: {}",
+                    pat, e
+                )));
+            }
+        }
+    }
+    if added == 0 {
+        return None;
+    }
+    match builder.build() {
+        Ok(set) => Some(set),
+        Err(e) => {
+            let _ = tx.send(ScanEvent::Warning(format!(
+                "exclude pattern compilation failed: {}",
+                e
+            )));
+            None
+        }
+    }
+}
+
+/// Compute the size of `path` for accounting purposes.
+///
+/// When `apparent` is `false` (default) the on-disk size is used:
+/// `st_blocks * 512` on Unix, falling back to the apparent length when
+/// the block count is zero or unavailable. This matches `du` and
+/// FileLight.
+///
+/// When `apparent` is `true` the byte count from `metadata.len()` is
+/// returned directly — what `ls -l` shows. Useful for sparse files,
+/// transparently-compressed filesystems, and CoW snapshots where the
+/// on-disk number is misleading.
+fn entry_size(path: &Path, apparent: bool) -> u64 {
+    if apparent {
+        return std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+    }
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
@@ -153,6 +204,11 @@ fn run(root_path: &Path, config: &ScanConfig, tx: &Sender<ScanEvent>) {
     let mut files: u64 = 0;
     let mut total_size: u64 = 0;
     let mut last_emit = Instant::now();
+
+    // Build the exclude matcher up-front. Patterns are matched against
+    // both the entry's full path and its base name so a user can write
+    // either `node_modules` or `**/node_modules/**`.
+    let exclude_set = build_exclude_set(&config.exclude, tx);
 
     let walker = WalkDir::new(root_path)
         .skip_hidden(false)
@@ -204,6 +260,16 @@ fn run(root_path: &Path, config: &ScanConfig, tx: &Sender<ScanEvent>) {
             continue;
         }
 
+        // Honour exclude patterns. Match against the full path *and*
+        // the base name so simple `node_modules` works without the
+        // user having to write a `**/node_modules/**` glob.
+        if let Some(set) = exclude_set.as_ref() {
+            let base_name = entry.file_name().to_string_lossy();
+            if set.is_match(&entry_path) || set.is_match(base_name.as_ref()) {
+                continue;
+            }
+        }
+
         let name = entry.file_name().to_string_lossy().into_owned();
 
         if file_type.is_dir() {
@@ -224,7 +290,7 @@ fn run(root_path: &Path, config: &ScanConfig, tx: &Sender<ScanEvent>) {
         }
 
         // Regular file.
-        let size = entry_size(&entry_path);
+        let size = entry_size(&entry_path, config.use_apparent_size);
 
         // Hard-link dedup on Unix: count each (dev, ino) once.
         #[cfg(unix)]
@@ -414,14 +480,105 @@ mod tests {
     }
 
     #[test]
+    fn excludes_matching_paths() {
+        let temp = TempDir::new().unwrap();
+        temp.child("keep/k.txt").write_str("k").unwrap();
+        temp.child("node_modules/lib.js").write_str("x").unwrap();
+        temp.child("node_modules/sub/lib.js")
+            .write_str("x")
+            .unwrap();
+
+        let cfg = ScanConfig {
+            exclude: vec!["node_modules".into()],
+            ..ScanConfig::default()
+        };
+        let mut handle = scan_streaming(temp.path(), &cfg);
+        let (_events, arena) = drain_until_done(&mut handle);
+        let arena = arena.unwrap();
+        let root = arena.root().unwrap();
+
+        // node_modules/ must not appear among the children.
+        let names: Vec<_> = arena
+            .folder(root)
+            .children_folders
+            .iter()
+            .map(|id| arena.folder(*id).file.name.clone())
+            .collect();
+        assert!(
+            !names.iter().any(|n| n == "node_modules"),
+            "exclude should drop node_modules, got {:?}",
+            names
+        );
+        assert!(names.iter().any(|n| n == "keep"));
+    }
+
+    #[test]
+    fn glob_exclude_matches_full_path() {
+        let temp = TempDir::new().unwrap();
+        temp.child("src/lib.rs").write_str("a").unwrap();
+        temp.child("target/debug/foo").write_str("b").unwrap();
+
+        let cfg = ScanConfig {
+            // Path-style glob — must match against the full path.
+            exclude: vec!["**/target/**".into()],
+            ..ScanConfig::default()
+        };
+        let mut handle = scan_streaming(temp.path(), &cfg);
+        let (_events, arena) = drain_until_done(&mut handle);
+        let arena = arena.unwrap();
+        let _root = arena.root().unwrap();
+        // Walk every recorded file and assert none lives under target/.
+        let mut all_paths = Vec::new();
+        for f in arena.files() {
+            all_paths.push(f.path.to_string_lossy().into_owned());
+        }
+        for p in &all_paths {
+            assert!(
+                !p.contains("/target/"),
+                "exclude **/target/** should drop {}",
+                p
+            );
+        }
+    }
+
+    #[test]
+    fn invalid_exclude_pattern_warns_and_continues() {
+        let temp = TempDir::new().unwrap();
+        temp.child("a.txt").write_str("a").unwrap();
+
+        let cfg = ScanConfig {
+            // Unbalanced bracket — globset will reject it.
+            exclude: vec!["[[broken".into()],
+            ..ScanConfig::default()
+        };
+        let mut handle = scan_streaming(temp.path(), &cfg);
+        let (events, arena) = drain_until_done(&mut handle);
+        assert!(arena.is_some(), "scan must complete despite bad pattern");
+        let warnings: Vec<_> = events
+            .iter()
+            .filter_map(|e| match e {
+                ScanEvent::Warning(s) => Some(s.clone()),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("invalid exclude pattern")),
+            "expected an 'invalid exclude pattern' warning, got {:?}",
+            warnings
+        );
+    }
+
+    #[test]
     fn respects_max_depth() {
         let temp = TempDir::new().unwrap();
         temp.child("a/b/c").create_dir_all().unwrap();
         temp.child("a/b/c/deep.txt").write_str("deep").unwrap();
 
         let cfg = ScanConfig {
-            follow_symlinks: false,
             max_depth: Some(1),
+            ..ScanConfig::default()
         };
         let mut handle = scan_streaming(temp.path(), &cfg);
         let (_events, arena) = drain_until_done(&mut handle);
