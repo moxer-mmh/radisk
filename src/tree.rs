@@ -1,25 +1,70 @@
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+/// Ordering applied when listing a folder's children. Stable across
+/// sessions via the `[display].sort_mode` config key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SortMode {
+    /// Largest first — the default since v0.1; matches FileLight/ncdu.
+    #[default]
+    SizeDesc,
+    /// Smallest first — useful when looking for the long tail of empty
+    /// or near-empty entries before pruning.
+    SizeAsc,
+    /// Case-insensitive ASCII alphabetical — most file-manager-y.
+    NameAsc,
+}
+
+impl SortMode {
+    /// Cycle to the next sort mode. The order is the most useful
+    /// rotation in practice: size desc → size asc → name → back to
+    /// size desc.
+    pub fn next(self) -> Self {
+        match self {
+            SortMode::SizeDesc => SortMode::SizeAsc,
+            SortMode::SizeAsc => SortMode::NameAsc,
+            SortMode::NameAsc => SortMode::SizeDesc,
+        }
+    }
+
+    /// Short human-readable label for the status bar.
+    pub fn label(self) -> &'static str {
+        match self {
+            SortMode::SizeDesc => "size↓",
+            SortMode::SizeAsc => "size↑",
+            SortMode::NameAsc => "name",
+        }
+    }
+}
+
 /// Unique identifier for files in the arena
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct FileId(pub usize);
 
 /// Unique identifier for folders in the arena
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct FolderId(pub usize);
 
 /// A file entry in the tree
 #[allow(dead_code)]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct File {
     pub name: String,
     pub size: u64,
     pub parent: Option<FolderId>,
     pub path: PathBuf,
+    /// Unix inode captured at scan time. `None` on non-Unix
+    /// platforms or when the metadata call failed. Used by the
+    /// delete path to refuse acting on a path that has been
+    /// swapped out from under the user since the dialog opened.
+    /// `#[serde(default)]` so older snapshots without this field
+    /// load cleanly with `inode = None`.
+    #[serde(default)]
+    pub inode: Option<u64>,
 }
 
 /// A folder entry in the tree
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Folder {
     pub file: File,
     pub children_files: Vec<FileId>,
@@ -28,7 +73,7 @@ pub struct Folder {
 }
 
 /// Arena allocator for the file tree
-#[derive(Debug)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TreeArena {
     files: Vec<File>,
     folders: Vec<Folder>,
@@ -86,21 +131,47 @@ impl TreeArena {
         &self.folders
     }
 
-    /// Get all items (files and folders) of a folder, sorted by size descending
+    /// Get all items (files and folders) of a folder, sorted by size
+    /// descending. Convenience wrapper around
+    /// [`Self::folder_items_sorted`] for callers that don't care about
+    /// the user-selected sort order (e.g. the radial layout, which has
+    /// always been size-driven).
     pub fn folder_items(&self, folder_id: FolderId) -> Vec<TreeItem> {
+        self.folder_items_sorted(folder_id, SortMode::SizeDesc)
+    }
+
+    /// Get all items (files and folders) of a folder, sorted by `mode`.
+    pub fn folder_items_sorted(&self, folder_id: FolderId, mode: SortMode) -> Vec<TreeItem> {
         let folder = &self.folders[folder_id.0];
-        let mut items = Vec::new();
+        let mut items: Vec<TreeItem> =
+            Vec::with_capacity(folder.children_files.len() + folder.children_folders.len());
 
         for &fid in &folder.children_files {
             items.push(TreeItem::File(fid, self.files[fid.0].size));
         }
-
         for &fid in &folder.children_folders {
             items.push(TreeItem::Folder(fid, self.folders[fid.0].file.size));
         }
 
-        items.sort_by(|a, b| b.size().cmp(&a.size()));
+        match mode {
+            SortMode::SizeDesc => {
+                items.sort_by_key(|item| std::cmp::Reverse(item.size()));
+            }
+            SortMode::SizeAsc => {
+                items.sort_by_key(|item| item.size());
+            }
+            SortMode::NameAsc => {
+                items.sort_by_key(|item| self.item_name_lowercase(item));
+            }
+        }
         items
+    }
+
+    fn item_name_lowercase(&self, item: &TreeItem) -> String {
+        match item {
+            TreeItem::File(id, _) => self.files[id.0].name.to_ascii_lowercase(),
+            TreeItem::Folder(id, _) => self.folders[id.0].file.name.to_ascii_lowercase(),
+        }
     }
 
     /// Get total file count in a folder (recursive)
@@ -126,6 +197,7 @@ impl TreeArena {
             size: 0,
             parent: None,
             path: root_path.clone(),
+            ..Default::default()
         };
         let root_folder = Folder {
             file: root_file,
@@ -142,6 +214,7 @@ impl TreeArena {
             size: 1000,
             parent: Some(root_id),
             path: root_path.join("big.txt"),
+            ..Default::default()
         };
         let f1_id = arena.add_file(f1);
 
@@ -150,6 +223,7 @@ impl TreeArena {
             size: 100,
             parent: Some(root_id),
             path: root_path.join("small.txt"),
+            ..Default::default()
         };
         let f2_id = arena.add_file(f2);
 
@@ -160,6 +234,7 @@ impl TreeArena {
             size: 500,
             parent: Some(root_id),
             path: sub_path.clone(),
+            ..Default::default()
         };
         let sub_folder = Folder {
             file: sub_file,
@@ -174,6 +249,7 @@ impl TreeArena {
             size: 500,
             parent: Some(sub_id),
             path: sub_path.join("nested.txt"),
+            ..Default::default()
         };
         let f3_id = arena.add_file(f3);
 
@@ -249,6 +325,7 @@ mod tests {
             size: 1024,
             parent: None,
             path: PathBuf::from("/test.txt"),
+            ..Default::default()
         };
         assert_eq!(file.name, "test.txt");
         assert_eq!(file.size, 1024);
@@ -261,6 +338,7 @@ mod tests {
             size: 0,
             parent: None,
             path: PathBuf::from("/mydir"),
+            ..Default::default()
         };
         let folder = Folder {
             file,
@@ -282,6 +360,7 @@ mod tests {
             size: 100,
             parent: None,
             path: PathBuf::from("/a.txt"),
+            ..Default::default()
         };
         let fid = arena.add_file(file);
         assert_eq!(fid, FileId(0));
@@ -314,6 +393,43 @@ mod tests {
     }
 
     #[test]
+    fn folder_items_sorted_size_asc_reverses_order() {
+        let arena = TreeArena::create_test_tree();
+        let root_id = arena.root().unwrap();
+        let items = arena.folder_items_sorted(root_id, SortMode::SizeAsc);
+        assert_eq!(items[0].size(), 100);
+        assert_eq!(items[1].size(), 500);
+        assert_eq!(items[2].size(), 1000);
+    }
+
+    #[test]
+    fn folder_items_sorted_name_is_alphabetical_case_insensitive() {
+        let arena = TreeArena::create_test_tree();
+        let root_id = arena.root().unwrap();
+        let items = arena.folder_items_sorted(root_id, SortMode::NameAsc);
+
+        // Resolve each item to its display name and check ordering.
+        let names: Vec<String> = items
+            .iter()
+            .map(|item| match item {
+                TreeItem::File(id, _) => arena.file(*id).name.clone(),
+                TreeItem::Folder(id, _) => arena.folder(*id).file.name.clone(),
+            })
+            .collect();
+        let mut sorted = names.clone();
+        sorted.sort_by_key(|s| s.to_ascii_lowercase());
+        assert_eq!(names, sorted, "NameAsc must yield alphabetical order");
+    }
+
+    #[test]
+    fn sort_mode_cycles() {
+        assert_eq!(SortMode::SizeDesc.next(), SortMode::SizeAsc);
+        assert_eq!(SortMode::SizeAsc.next(), SortMode::NameAsc);
+        assert_eq!(SortMode::NameAsc.next(), SortMode::SizeDesc);
+        assert_eq!(SortMode::default(), SortMode::SizeDesc);
+    }
+
+    #[test]
     fn test_folder_items_contains_both_types() {
         let arena = TreeArena::create_test_tree();
         let root_id = arena.root().unwrap();
@@ -335,6 +451,7 @@ mod tests {
             size: 0,
             parent: None,
             path: PathBuf::from("/empty"),
+            ..Default::default()
         };
         let folder = Folder {
             file,

@@ -5,7 +5,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, Paragraph, Wrap},
+    widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap},
     Frame,
 };
 
@@ -19,14 +19,31 @@ pub fn render(f: &mut Frame, app: &App) {
     }
 }
 
-/// Render scanning mode
+/// Render scanning mode.
+///
+/// Once Phase 21's live arena has produced a partial radial map (Some
+/// children visible), we render the full Viewing layout — sidebar +
+/// radial + status — so the user sees the biggest folders fill in as
+/// the walker discovers them. Until then we show the original
+/// "Scanning..." placeholder so an empty frame doesn't confuse new
+/// users.
+///
+/// The status bar in either branch threads the live file/byte count
+/// from `scan_progress` and the most-recently-touched path so users
+/// always have a "scan is alive" cue even on huge trees.
 fn render_scanning(f: &mut Frame, app: &App) {
+    if app.radial_map.is_some() {
+        // Partial render: same layout as Viewing mode, just with a
+        // status bar that calls out we're still scanning.
+        render_viewing(f, app);
+        return;
+    }
+
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(0), Constraint::Length(3)])
         .split(f.area());
 
-    // Progress message
     let progress_text = if let Some(ref progress) = app.scan_progress {
         format!(
             "Scanning {}...\n{} files ({})",
@@ -44,7 +61,6 @@ fn render_scanning(f: &mut Frame, app: &App) {
         .wrap(Wrap { trim: true });
     f.render_widget(progress, chunks[0]);
 
-    // Status bar
     let status = Paragraph::new("Press ESC or 'q' to quit")
         .block(Block::default().borders(Borders::TOP))
         .style(Style::default().fg(Color::Gray));
@@ -70,8 +86,12 @@ fn render_viewing(f: &mut Frame, app: &App) {
         .constraints([Constraint::Min(0), Constraint::Length(2)])
         .split(main_chunks[1]);
 
-    // Radial map
-    render_radial_map(f, app, map_chunks[0]);
+    // Main view (radial / tree / largest-files)
+    match app.view {
+        crate::views::View::Radial => render_radial_map(f, app, map_chunks[0]),
+        crate::views::View::Tree => crate::views::render_tree(f, app, map_chunks[0]),
+        crate::views::View::Largest => crate::views::render_largest(f, app, map_chunks[0]),
+    }
 
     // Status bar
     render_status_bar(f, app, map_chunks[1]);
@@ -91,6 +111,8 @@ fn render_viewing(f: &mut Frame, app: &App) {
 
 /// Render sidebar with file list
 fn render_sidebar(f: &mut Frame, app: &App, area: Rect) {
+    use crate::theme::Role;
+    let theme = &app.theme;
     let items: Vec<ListItem> = app
         .sidebar_items()
         .iter()
@@ -103,9 +125,9 @@ fn render_sidebar(f: &mut Frame, app: &App, area: Rect) {
                         .as_ref()
                         .map(|a| a.file(*id).name.clone())
                         .unwrap_or_else(|| "?".to_string());
-                    let mut style = Style::default().fg(Color::White);
+                    let mut style = Style::default().fg(theme.color(Role::File));
                     if i == app.sidebar_index {
-                        style = style.bg(Color::DarkGray);
+                        style = style.bg(theme.color(Role::SelectionBg));
                     }
                     if app.sidebar_hover_index == Some(i) {
                         style = style.add_modifier(Modifier::UNDERLINED);
@@ -119,10 +141,10 @@ fn render_sidebar(f: &mut Frame, app: &App, area: Rect) {
                         .map(|a| a.folder(*id).file.name.clone())
                         .unwrap_or_else(|| "?".to_string());
                     let mut style = Style::default()
-                        .fg(Color::Cyan)
+                        .fg(theme.color(Role::Folder))
                         .add_modifier(Modifier::BOLD);
                     if i == app.sidebar_index {
-                        style = style.bg(Color::DarkGray);
+                        style = style.bg(theme.color(Role::SelectionBg));
                     }
                     if app.sidebar_hover_index == Some(i) {
                         style = style.add_modifier(Modifier::UNDERLINED);
@@ -130,7 +152,22 @@ fn render_sidebar(f: &mut Frame, app: &App, area: Rect) {
                     ("[D]", name, format_size(*s), style)
                 }
             };
-            let content = format!("{} {} ({})", icon, name, size_str);
+            // Mark rows that are part of the multi-select set with
+            // a leading checkmark so users can see which entries
+            // would be hit by the next Shift+D.
+            let mark = {
+                let path = match item {
+                    TreeItem::File(id, _) => app.arena.as_ref().map(|a| a.file(*id).path.clone()),
+                    TreeItem::Folder(id, _) => {
+                        app.arena.as_ref().map(|a| a.folder(*id).file.path.clone())
+                    }
+                };
+                match path {
+                    Some(p) if app.selected_paths.contains(&p) => "✓",
+                    _ => " ",
+                }
+            };
+            let content = format!("{}{} {} ({})", mark, icon, name, size_str);
             ListItem::new(content).style(style)
         })
         .collect();
@@ -141,18 +178,19 @@ fn render_sidebar(f: &mut Frame, app: &App, area: Rect) {
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| "/".to_string());
 
+    let border_color = if app.focus == Focus::Sidebar {
+        theme.color(Role::BorderFocused)
+    } else {
+        theme.color(Role::Border)
+    };
     let sidebar = List::new(items)
         .block(
             Block::default()
                 .borders(Borders::ALL)
                 .title(format!(" {} ", title))
-                .border_style(if app.focus == Focus::Sidebar {
-                    Style::default().fg(Color::Yellow)
-                } else {
-                    Style::default()
-                }),
+                .border_style(Style::default().fg(border_color)),
         )
-        .style(Style::default().fg(Color::White));
+        .style(Style::default().fg(theme.color(Role::Foreground)));
 
     f.render_widget(sidebar, area);
 }
@@ -162,14 +200,12 @@ fn render_radial_map(f: &mut Frame, app: &App, area: Rect) {
     use ratatui::symbols::Marker;
     use ratatui::widgets::canvas::Canvas;
 
-    if app.radial_map.is_none() {
+    let Some(map) = app.radial_map.as_ref() else {
         let placeholder =
             Paragraph::new("No data").block(Block::default().borders(Borders::ALL).title("Map"));
         f.render_widget(placeholder, area);
         return;
-    }
-
-    let map = app.radial_map.as_ref().unwrap();
+    };
 
     // Calculate max radius from map (this is already scaled to fit)
     let max_radius = map
@@ -269,7 +305,7 @@ fn render_status_bar(f: &mut Frame, app: &App, area: Rect) {
     let help_text = if app.hovered_uuid.is_some() {
         "[u/Backspace] Up  [Enter] Open  [d] Delete  [+/-] Zoom  [r] Rescan  [?] Help  [q] Quit"
     } else {
-        "[u/Backspace] Up  [d] Delete  [+/-] Zoom  [r] Rescan  [Tab] Focus  [?] Help  [q] Quit"
+        "[h/l] Up/In  [j/k] Move  [d] Del  [+/-] Zoom  [r] Rescan  [Tab] Focus  [v] View  [S] Sort  [a] Apparent  [?] Help  [q] Quit"
     };
 
     let status_line = Line::from(vec![
@@ -308,97 +344,94 @@ fn render_tooltip(f: &mut Frame, text: &str) {
     f.render_widget(tooltip, tooltip_area);
 }
 
-/// Render help overlay
+/// Render help overlay.
+///
+/// The previous implementation rendered the main view, then a dim
+/// `Block` over the whole frame, then the help block on top. The
+/// problem: `Block::render` only *styles* cells — it does not
+/// reset their `symbol`, so the radial-canvas Braille glyphs and
+/// the sidebar text bled through the help body.
+///
+/// Fix: use [`Clear`] (which writes a space to every cell of its
+/// area, with default style) before each layer that needs to look
+/// truly opaque. The result is a clean, readable overlay regardless
+/// of what's behind it.
 fn render_help(f: &mut Frame, app: &App) {
     let area = f.area();
 
-    // First render the main view behind
+    // 1. Background pass. The main view is still drawn underneath
+    //    so the modal feels grounded; we wipe everything with Clear
+    //    afterwards and tint the whole frame with a dim panel so the
+    //    help foreground has an unambiguous backdrop.
     render_viewing(f, app);
+    f.render_widget(Clear, area);
+    let dim = Block::default().style(Style::default().bg(Color::Rgb(15, 15, 22)));
+    f.render_widget(dim, area);
 
-    // Render dark overlay to dim the background
-    let overlay = Block::default()
-        .style(Style::default().bg(Color::Rgb(10, 10, 15)))
-        .borders(Borders::NONE);
-    f.render_widget(overlay, f.area());
+    // 2. Carve out the help panel. 70% wide, 80% tall so the keymap
+    //    fits without wrapping at typical terminal widths.
+    let help_area = centered_rect(70, 80, area);
 
-    // Then overlay help
-    let help_area = centered_rect(60, 70, area);
+    // 3. Wipe the panel cells specifically so the dim tint above
+    //    can't leak symbol bits in either, then paint the help.
+    f.render_widget(Clear, help_area);
+
+    let key_style = Style::default()
+        .fg(Color::LightCyan)
+        .add_modifier(Modifier::BOLD);
+    let head_style = Style::default()
+        .fg(Color::Yellow)
+        .add_modifier(Modifier::BOLD);
+    let body_style = Style::default().fg(Color::White);
+    let dim_style = Style::default().fg(Color::Gray);
+
+    let row = |chord: &str, label: &str| {
+        Line::from(vec![
+            Span::raw("  "),
+            Span::styled(format!("{:<14}", chord), key_style),
+            Span::styled(label.to_string(), body_style),
+        ])
+    };
+    let head = |t: &str| Line::from(Span::styled(t.to_string(), head_style));
+    let blank = || Line::from("");
 
     let help_text = vec![
+        head("Navigation"),
+        row("h / ← / u / ⌫", "Go to parent directory"),
+        row("l / → / Enter", "Descend into hovered folder"),
+        row("j / k  ↓ / ↑", "Move sidebar selection"),
+        row("gg / G", "Jump to first / last item"),
+        row("Ctrl-d / Ctrl-u", "Half-page down / up"),
+        row("Tab", "Toggle focus (map ↔ sidebar)"),
+        blank(),
+        head("View"),
+        row("v", "Cycle radial / tree / largest-files"),
+        row("Shift+S", "Cycle sort  (size↓ → size↑ → name)"),
+        row("a", "Apparent vs on-disk size (rescans)"),
+        row("+ / = / -", "Zoom rings (in / in / out)"),
+        blank(),
+        head("Actions"),
+        row("r", "Rescan"),
+        row("d", "Delete (trash if trash-put / gio is installed)"),
+        row("Space", "Toggle item in/out of multi-select"),
+        row("Shift+D", "Delete every selected item (one confirm)"),
+        row("Shift+X", "Clear multi-select"),
+        row("o", "Show package owner in status bar"),
+        row("?", "Show / hide this help"),
+        row("q / Esc", "Quit"),
+        blank(),
+        head("Mouse"),
+        row("Left click", "Open folder / go up (centre)"),
+        row("Right click", "Open context menu"),
+        row("Scroll", "Zoom rings"),
+        blank(),
         Line::from(Span::styled(
-            "Keyboard Shortcuts",
-            Style::default()
-                .fg(Color::White)
-                .add_modifier(Modifier::BOLD),
-        )),
-        Line::from(""),
-        Line::from(vec![
-            Span::styled("  q/Esc      ", Style::default().fg(Color::White)),
-            Span::raw("Quit"),
-        ]),
-        Line::from(vec![
-            Span::styled("  u/Backspace", Style::default().fg(Color::White)),
-            Span::raw("Go to parent directory"),
-        ]),
-        Line::from(vec![
-            Span::styled("  Enter      ", Style::default().fg(Color::White)),
-            Span::raw("Open selected folder"),
-        ]),
-        Line::from(vec![
-            Span::styled("  +/-/=      ", Style::default().fg(Color::White)),
-            Span::raw("Zoom in/out (change ring depth)"),
-        ]),
-        Line::from(vec![
-            Span::styled("  r          ", Style::default().fg(Color::White)),
-            Span::raw("Rescan directory"),
-        ]),
-        Line::from(vec![
-            Span::styled("  d          ", Style::default().fg(Color::White)),
-            Span::raw("Delete selected item"),
-        ]),
-        Line::from(vec![
-            Span::styled("  Tab        ", Style::default().fg(Color::White)),
-            Span::raw("Toggle focus (map/sidebar)"),
-        ]),
-        Line::from(vec![
-            Span::styled("  j/k        ", Style::default().fg(Color::White)),
-            Span::raw("Navigate up/down in sidebar"),
-        ]),
-        Line::from(vec![
-            Span::styled("  ?          ", Style::default().fg(Color::White)),
-            Span::raw("Show this help"),
-        ]),
-        Line::from(""),
-        Line::from(Span::styled(
-            "Mouse",
-            Style::default()
-                .fg(Color::White)
-                .add_modifier(Modifier::BOLD),
-        )),
-        Line::from(""),
-        Line::from(vec![
-            Span::styled("  Left click ", Style::default().fg(Color::White)),
-            Span::raw("Open folder / Go up (center)"),
-        ]),
-        Line::from(vec![
-            Span::styled("  Scroll     ", Style::default().fg(Color::White)),
-            Span::raw("Zoom in/out"),
-        ]),
-        Line::from(""),
-        Line::from(Span::styled(
-            "Support",
-            Style::default()
-                .fg(Color::White)
-                .add_modifier(Modifier::BOLD),
+            "  Press q / Esc / ? / Enter to close",
+            dim_style,
         )),
         Line::from(Span::styled(
-            "  Buy me a coffee: ko-fi.com/mimobn_",
-            Style::default().fg(Color::Gray),
-        )),
-        Line::from(""),
-        Line::from(Span::styled(
-            "Press any key to close",
-            Style::default().fg(Color::Gray),
+            "  Every chord above is rebindable — see docs/KEYBINDS.md",
+            dim_style,
         )),
     ];
 
@@ -407,15 +440,11 @@ fn render_help(f: &mut Frame, app: &App) {
             Block::default()
                 .borders(Borders::ALL)
                 .title(" Help ")
-                .border_style(Style::default().fg(Color::White)),
+                .title_style(head_style)
+                .border_style(Style::default().fg(Color::White))
+                .style(Style::default().bg(Color::Rgb(20, 20, 30))),
         )
         .style(Style::default().bg(Color::Rgb(20, 20, 30)));
-
-    // Render solid background first to prevent canvas text from showing through
-    let bg = Block::default()
-        .style(Style::default().bg(Color::Rgb(20, 20, 30)))
-        .borders(Borders::NONE);
-    f.render_widget(bg, help_area);
 
     f.render_widget(help, help_area);
 }
@@ -501,22 +530,31 @@ fn render_delete_confirmation(f: &mut Frame, app: &App) {
     // First render the main view behind
     render_viewing(f, app);
 
-    // Render dark overlay to dim the background
-    let overlay = Block::default()
-        .style(Style::default().bg(Color::Rgb(20, 20, 20)))
-        .borders(Borders::NONE);
-    f.render_widget(overlay, f.area());
-
+    // Wipe the cells (Block-only style does not reset symbols, so
+    // the radial Braille glyphs would otherwise bleed through).
     let area = f.area();
+    f.render_widget(Clear, area);
+    let dim = Block::default().style(Style::default().bg(Color::Rgb(15, 15, 22)));
+    f.render_widget(dim, area);
+
     let delete_area = centered_rect(40, 25, area);
+    f.render_widget(Clear, delete_area);
 
-    let path_display = app
-        .delete_path
-        .as_ref()
-        .map(|p| p.display().to_string())
-        .unwrap_or_else(|| "unknown".to_string());
+    // For batch deletes, the dialog summarises the selection
+    // instead of pointing at a single missing path.
+    let batch_count = app.selected_paths.len();
+    let path_display = if batch_count > 0 {
+        format!("{} selected entries", batch_count)
+    } else {
+        app.delete_path
+            .as_ref()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "unknown".to_string())
+    };
 
-    let type_text = if app.delete_is_folder {
+    let type_text = if batch_count > 0 {
+        "selection"
+    } else if app.delete_is_folder {
         "folder"
     } else {
         "file"
