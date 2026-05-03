@@ -1,0 +1,130 @@
+# radisk — Architecture
+
+This document describes the runtime layout of `radisk`. It is meant for
+contributors and is updated whenever the structure changes. Read this before
+the source — it short-circuits a lot of reading.
+
+> **Status**: living document. Sections marked **(planned)** describe work in
+> progress; everything else reflects the code on the current branch.
+
+---
+
+## High-level layers
+
+```
+┌───────────────────────────────────────────────────────────┐
+│ main.rs                                                   │
+│   - parse CLI, set up terminal (raw mode + alt screen)    │
+│   - install panic hook + Drop guard for terminal restore  │
+│   - drive the event loop                                  │
+└───────────────────────────────────────────────────────────┘
+                         │
+                         ▼
+┌───────────────────────────────────────────────────────────┐
+│ app.rs                                                    │
+│   App: state machine (AppMode), input handlers, sidebar,  │
+│   delete confirmation, navigation history, context menu   │
+│   dispatch. Holds the arena and the radial map.           │
+└───────────────────────────────────────────────────────────┘
+        │                          │                  │
+        ▼                          ▼                  ▼
+┌─────────────────┐    ┌─────────────────┐    ┌─────────────┐
+│ scanner.rs      │    │ tree.rs         │    │ ui.rs       │
+│ recursive walk, │    │ Arena (Vec-     │    │ ratatui     │
+│ st_blocks size, │    │ backed) of      │    │ layout +    │
+│ inode dedup,    │    │ File / Folder   │    │ sidebar +   │
+│ progress mpsc   │    │ nodes           │    │ help/dialog │
+└─────────────────┘    └─────────────────┘    └─────────────┘
+                                                    │
+                                                    ▼
+                                       ┌────────────────────────┐
+                                       │ radial.rs / renderer.rs│
+                                       │ Angle math + Braille   │
+                                       │ canvas painting        │
+                                       └────────────────────────┘
+                                                    │
+                                                    ▼
+                                       ┌────────────────────────┐
+                                       │ color.rs               │
+                                       │ Material palette       │
+                                       │ (HSL/Lab math)         │
+                                       └────────────────────────┘
+
+context_menu.rs is a small leaf consumed by app.rs.
+```
+
+---
+
+## Module responsibilities
+
+| Module | Owns | Knows about |
+|--------|------|-------------|
+| `main` | CLI, terminal lifecycle, event loop | `App`, ratatui backend |
+| `app` | `App` state, input dispatch, scan orchestration | `scanner`, `tree`, `radial`, `renderer`, `ui`, `context_menu` |
+| `scanner` | Filesystem walk, progress events, inode dedup | `tree` |
+| `tree` | `TreeArena`, `File`, `Folder`, `FolderId`, `FileId` | nothing internal |
+| `radial` | `RadialMap` and segment angles | `tree` |
+| `renderer` | Braille canvas painting + segment lookup | `radial`, `color` |
+| `ui` | ratatui layout, sidebar, help, status, confirm dialog | `app`, `radial`, `renderer`, `color` |
+| `color` | Palette, gradients, HSL/Lab math | nothing internal |
+| `context_menu` | Right-click menu state | nothing internal |
+
+---
+
+## Data flow
+
+1. **Startup**: `main` parses CLI, canonicalises the target path, builds
+   `App::new(...)`. `App::start_scan` spins a progress thread (mpsc-based) and
+   runs a synchronous scan into a `TreeArena`. **(planned)** the synchronous
+   part will be replaced by a streaming parallel walker.
+2. **After scan**: `App` builds a `RadialMap` from the arena via
+   `radial::build_radial_map`. The map's segments carry stable `Uuid`s used
+   for hover/selection.
+3. **Frame**: `ui::render` lays out sidebar + canvas, calls
+   `RadialRenderer::render` for the canvas, then overlays help / confirm /
+   context-menu as appropriate.
+4. **Input**: `App::handle_key` / `handle_mouse` mutate state and may trigger
+   a `rebuild_map` (e.g. on navigate, zoom, resize).
+5. **Delete**: `trigger_delete` stages a path + a default choice (now **No**)
+   into `AppMode::ConfirmDelete`; if the user confirms, the path is removed
+   and the tree is rescanned.
+
+---
+
+## Key invariants
+
+- **Arena lifecycle**: `App::arena` is `None` while scanning, `Some(...)` once
+  the first scan completes. Code paths that need it use `if let Some(arena)
+  = self.arena.as_ref()` rather than `unwrap`. **(planned)** the type will be
+  refined to make this state explicit at compile time (`enum AppData`).
+- **Radial map lifecycle**: parallel to the arena — `None` while scanning,
+  `Some(...)` afterwards. `ui::render` short-circuits if absent.
+- **`TreeArena::root` after `set_root`**: always `Some(root_id)`. The few
+  places that call `arena.root()` outside the post-scan path treat `None` as a
+  recoverable error rather than panicking.
+- **Inode dedup is best-effort**: hard-link files are counted once per
+  `(dev, ino)` pair on Unix; on other platforms duplicates are counted.
+
+---
+
+## Error handling
+
+- The application uses `anyhow::Result<T>` at boundaries (`main`, terminal
+  setup, top-level event loop calls).
+- The scanner exposes a typed `ScanError` (`thiserror`-derived **(planned)**)
+  so callers can match on `PermissionDenied` and continue rather than abort.
+- `unwrap()` / `expect()` are confined to test code and to spots where the
+  invariant is documented and locally verifiable.
+
+---
+
+## Build & verify
+
+```sh
+cargo fmt --check
+cargo clippy --all-targets -- -D warnings
+cargo test
+cargo doc --no-deps
+```
+
+CI **(planned)** will run all of the above on every PR.
