@@ -43,6 +43,12 @@ pub enum Action {
     /// Cycle through the available [`crate::views::View`]s — radial,
     /// tree, etc.
     ToggleView,
+    /// Cycle the [`crate::tree::SortMode`] used to order children in
+    /// the sidebar and tree view (radial geometry stays size-driven).
+    CycleSort,
+    /// Toggle between apparent file size (`metadata.len()`) and
+    /// on-disk size (`st_blocks * 512` on Unix). Triggers a rescan.
+    ToggleApparentSize,
 }
 
 impl Action {
@@ -62,6 +68,8 @@ impl Action {
             Action::MoveUp => "move_up",
             Action::MoveDown => "move_down",
             Action::ToggleView => "toggle_view",
+            Action::CycleSort => "cycle_sort",
+            Action::ToggleApparentSize => "toggle_apparent_size",
         }
     }
 
@@ -79,6 +87,8 @@ impl Action {
             "move_up" => Some(Action::MoveUp),
             "move_down" => Some(Action::MoveDown),
             "toggle_view" => Some(Action::ToggleView),
+            "cycle_sort" => Some(Action::CycleSort),
+            "toggle_apparent_size" => Some(Action::ToggleApparentSize),
             _ => None,
         }
     }
@@ -99,6 +109,8 @@ impl Action {
             Action::MoveUp,
             Action::MoveDown,
             Action::ToggleView,
+            Action::CycleSort,
+            Action::ToggleApparentSize,
         ]
     }
 }
@@ -245,6 +257,18 @@ impl Keybinds {
         add(KeyCode::Char('j'), KeyModifiers::NONE, Action::MoveDown);
 
         add(KeyCode::Char('v'), KeyModifiers::NONE, Action::ToggleView);
+
+        // Capital S so a single 's' stays free for a future "search"
+        // action (ncdu has one), and to match the convention that
+        // "destructive" or "structural" toggles use the Shift form.
+        add(KeyCode::Char('S'), KeyModifiers::SHIFT, Action::CycleSort);
+
+        // Lowercase 'a' for "apparent" — ncdu uses the same chord.
+        add(
+            KeyCode::Char('a'),
+            KeyModifiers::NONE,
+            Action::ToggleApparentSize,
+        );
 
         Self { map }
     }

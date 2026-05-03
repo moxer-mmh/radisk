@@ -48,6 +48,14 @@ struct Cli {
     /// `$XDG_CONFIG_HOME/radisk/config.toml` (or the platform equivalent).
     #[arg(long)]
     config: Option<PathBuf>,
+
+    /// Glob pattern to skip while walking. May be repeated. Patterns
+    /// are matched against both the full path and the base name, so
+    /// `--exclude node_modules` and `--exclude '**/.cache/**'` both
+    /// work. Adds to (does not replace) `[scan].exclude` from the
+    /// config file.
+    #[arg(long = "exclude", value_name = "PATTERN")]
+    exclude: Vec<String>,
 }
 
 /// Restore terminal to usable state
@@ -94,6 +102,9 @@ fn main() -> Result<()> {
     };
     if let Some(d) = cli.depth {
         cfg.display.ring_depth = d.max(1);
+    }
+    if !cli.exclude.is_empty() {
+        cfg.scan.exclude.extend(cli.exclude);
     }
 
     // Setup panic hook to restore terminal

@@ -6,7 +6,7 @@ use crate::radial::{build_radial_map, RadialConfig, RadialMap, Segment};
 use crate::renderer::{CanvasCoords, RadialRenderer};
 use crate::scanner::ScanProgress;
 use crate::scanner_streaming::{scan_streaming, ScanEvent, ScanHandle};
-use crate::tree::{format_size, FolderId, TreeArena, TreeItem};
+use crate::tree::{format_size, FolderId, SortMode, TreeArena, TreeItem};
 use crate::views::View;
 use crossterm::event::{KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKind};
 use std::path::PathBuf;
@@ -53,6 +53,10 @@ pub struct App {
     /// Currently active main-area view (radial, tree, …). Toggled by
     /// the `toggle_view` action.
     pub view: View,
+    /// User-selected ordering for sidebar and tree-view rows. Cycled
+    /// by the `cycle_sort` action; the radial layout is always
+    /// size-driven and ignores this.
+    pub sort_mode: SortMode,
     pub radial_map: Option<RadialMap>,
     pub renderer: RadialRenderer,
     pub hovered_uuid: Option<Uuid>,
@@ -102,6 +106,7 @@ impl App {
             config,
             keybinds,
             view: View::default(),
+            sort_mode: SortMode::default(),
             radial_map: None,
             renderer: RadialRenderer::new(ColorConfig::default()),
             hovered_uuid: None,
@@ -247,6 +252,20 @@ impl App {
             Action::MoveUp => self.move_hover_up(),
             Action::MoveDown => self.move_hover_down(),
             Action::ToggleView => self.view = self.view.next(),
+            Action::CycleSort => {
+                self.sort_mode = self.sort_mode.next();
+                self.status_message = format!("sort: {}", self.sort_mode.label());
+            }
+            Action::ToggleApparentSize => {
+                self.config.scan.use_apparent_size = !self.config.scan.use_apparent_size;
+                self.status_message = if self.config.scan.use_apparent_size {
+                    "apparent size — rescanning…".to_string()
+                } else {
+                    "on-disk size — rescanning…".to_string()
+                };
+                // Re-walk: the size accounting changed at every node.
+                self.start_scan();
+            }
         }
     }
 
@@ -928,11 +947,13 @@ impl App {
         None
     }
 
-    /// Get segments for sidebar display
+    /// Get segments for sidebar display, ordered by the user's
+    /// currently-selected [`SortMode`]. Shared with the tree view so
+    /// both surfaces stay consistent without duplicating the lookup.
     pub fn sidebar_items(&self) -> Vec<crate::tree::TreeItem> {
         if let Some(ref arena) = self.arena {
             if let Some(root_id) = arena.root() {
-                return arena.folder_items(root_id);
+                return arena.folder_items_sorted(root_id, self.sort_mode);
             }
         }
         Vec::new()

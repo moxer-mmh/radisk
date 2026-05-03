@@ -270,7 +270,7 @@ fn render_status_bar(f: &mut Frame, app: &App, area: Rect) {
     let help_text = if app.hovered_uuid.is_some() {
         "[u/Backspace] Up  [Enter] Open  [d] Delete  [+/-] Zoom  [r] Rescan  [?] Help  [q] Quit"
     } else {
-        "[u/Backspace] Up  [d] Delete  [+/-] Zoom  [r] Rescan  [Tab] Focus  [v] View  [?] Help  [q] Quit"
+        "[u] Up  [d] Del  [+/-] Zoom  [r] Rescan  [Tab] Focus  [v] View  [S] Sort  [a] Apparent  [?] Help  [q] Quit"
     };
 
     let status_line = Line::from(vec![
@@ -364,6 +364,14 @@ fn render_help(f: &mut Frame, app: &App) {
         Line::from(vec![
             Span::styled("  v          ", Style::default().fg(Color::White)),
             Span::raw("Toggle view (radial / tree)"),
+        ]),
+        Line::from(vec![
+            Span::styled("  Shift+S    ", Style::default().fg(Color::White)),
+            Span::raw("Cycle sort (size↓ / size↑ / name)"),
+        ]),
+        Line::from(vec![
+            Span::styled("  a          ", Style::default().fg(Color::White)),
+            Span::raw("Toggle apparent vs on-disk size (rescans)"),
         ]),
         Line::from(vec![
             Span::styled("  j/k        ", Style::default().fg(Color::White)),
