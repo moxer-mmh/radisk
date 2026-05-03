@@ -2,7 +2,7 @@
 //!
 //! The legacy delete path called `std::fs::remove_file` /
 //! `remove_dir_all` directly, which is irreversible. Most Linux desktops
-//! ship a [trash-cli][1] (`trash-put`) or [gvfs] (`gio trash`) helper
+//! ship a [trash-cli][1] (`trash-put`) or gvfs (`gio trash`) helper
 //! that moves the entry into the user's `~/.local/share/Trash/` so the
 //! file can be undone. radisk now prefers those when available and
 //! falls back to a permanent `rm` when neither is present.

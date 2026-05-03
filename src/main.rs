@@ -3,6 +3,7 @@ mod color;
 mod config;
 mod context_menu;
 mod delete;
+mod diff;
 mod keybinds;
 mod radial;
 mod renderer;
@@ -15,7 +16,7 @@ mod views;
 
 use anyhow::{bail, Context, Result};
 use app::App;
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use config::Config;
 use crossterm::{
     cursor,
@@ -71,6 +72,27 @@ struct Cli {
     /// machine without filesystem access to the original target.
     #[arg(long, value_name = "PATH", conflicts_with = "export")]
     import: Option<PathBuf>,
+
+    /// Optional subcommand. When present, the positional `path` and
+    /// the `--export` / `--import` flags are ignored — the
+    /// subcommand defines its own inputs.
+    #[command(subcommand)]
+    command: Option<Cmd>,
+}
+
+/// Subcommands. Kept opt-in so the existing `radisk PATH` usage
+/// continues to work without changes — only when a subcommand name
+/// is passed does the alternative flow kick in.
+#[derive(Subcommand)]
+enum Cmd {
+    /// Compare two snapshots and print the folder-level differences
+    /// to stdout, sorted by absolute size delta descending.
+    Diff {
+        /// Snapshot file to diff *from* (the older / baseline state).
+        a: PathBuf,
+        /// Snapshot file to diff *to* (the newer / current state).
+        b: PathBuf,
+    },
 }
 
 /// Restore terminal to usable state
@@ -99,6 +121,12 @@ impl Drop for TerminalGuard {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
+
+    // Subcommands fork the entire control flow before we touch the
+    // terminal or load the config file.
+    if let Some(cmd) = cli.command {
+        return run_subcommand(cmd);
+    }
 
     // Load config: explicit --config wins, else the platform default path
     // (which falls back to compiled-in defaults if missing). CLI flags
@@ -196,6 +224,22 @@ fn main() -> Result<()> {
     std::mem::forget(_guard);
 
     result
+}
+
+/// Dispatch a subcommand. Subcommands never enter the TUI; they're
+/// pure stdin/stdout flows so they compose with shell pipelines.
+fn run_subcommand(cmd: Cmd) -> Result<()> {
+    match cmd {
+        Cmd::Diff { a, b } => {
+            let arena_a = snapshot::load(&a)
+                .with_context(|| format!("failed to load snapshot {}", a.display()))?;
+            let arena_b = snapshot::load(&b)
+                .with_context(|| format!("failed to load snapshot {}", b.display()))?;
+            let entries = diff::folder_diff(&arena_a, &arena_b);
+            print!("{}", diff::format_diff(&entries));
+            Ok(())
+        }
+    }
 }
 
 /// Run a scan with no UI and write the resulting arena to `out`. Used
