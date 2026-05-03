@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (Phase 7 — diff subcommand + polish)
+- **`radisk diff A B` subcommand** compares two snapshots and prints
+  the folder-level differences to stdout, sorted by absolute size
+  delta descending. Marker glyphs `~`/`+`/`-` for changed/added/
+  removed; signed sizes; full `from -> to` so the output is
+  immediately scannable. The subcommand is opt-in: existing
+  `radisk PATH` invocations continue to work without changes.
+- New `diff` module exposes `folder_diff(a, b) -> Vec<DiffEntry>`
+  and `format_diff(&entries) -> String` as pure functions, so the
+  output can be reused by future tooling (e.g. a GUI viewer or a
+  CI bot that watches a tree's growth).
+- 6 unit tests cover identical-tree empty diff, added-folder
+  detection, signed delta on a growing folder, sort-order
+  invariant, formatted-output sanity, and the empty-input message.
+- README rewritten to document the streaming scanner benchmarks,
+  every Phase 1–7 feature, and the `--export` / `--import` /
+  `diff` workflow with a worked example. Links out to
+  `ARCHITECTURE.md`, `docs/SNAPSHOT_FORMAT.md`, and
+  `docs/config.example.toml` instead of duplicating their content.
+- CI gains a `clippy` job (`cargo clippy --all-targets -D warnings`)
+  alongside the existing test/fmt/docs jobs. Phase-1 cleanup means
+  this gate is already green; CI will keep it that way.
+
 ### Added (Phase 6 — trash + snapshot export/import)
 - **Trash-aware deletes**. New `delete` module detects `trash-put`
   (trash-cli) or `gio trash` at startup and routes deletes through

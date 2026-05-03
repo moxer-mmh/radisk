@@ -93,6 +93,7 @@ context_menu.rs is a small leaf consumed by app.rs.
 | `views` | `View` enum (Radial, Tree), tree-view row builder + renderer | `app`, `tree` |
 | `delete` | `DeleteStrategy` (TrashPut, GioTrash, Permanent) detection + TOCTOU-checked delete | nothing internal |
 | `snapshot` | `.radisk` export/import (RDSK magic, u16 version, zstd+postcard arena) | `tree` |
+| `diff` | Folder-level snapshot comparison (`folder_diff`, `format_diff`) | `tree` |
 | `color` | Palette, gradients, HSL/Lab math | nothing internal |
 | `context_menu` | Right-click menu state | nothing internal |
 
