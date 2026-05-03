@@ -7,6 +7,7 @@ use crate::renderer::{CanvasCoords, RadialRenderer};
 use crate::scanner::ScanProgress;
 use crate::scanner_streaming::{scan_streaming, ScanEvent, ScanHandle};
 use crate::tree::{format_size, FolderId, TreeArena, TreeItem};
+use crate::views::View;
 use crossterm::event::{KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKind};
 use std::path::PathBuf;
 use uuid::Uuid;
@@ -49,6 +50,9 @@ pub struct App {
     /// Keybind table, derived from `config.keybinds` at construction
     /// time. Looked up once per key event in `handle_viewing_key`.
     pub keybinds: Keybinds,
+    /// Currently active main-area view (radial, tree, …). Toggled by
+    /// the `toggle_view` action.
+    pub view: View,
     pub radial_map: Option<RadialMap>,
     pub renderer: RadialRenderer,
     pub hovered_uuid: Option<Uuid>,
@@ -97,6 +101,7 @@ impl App {
             ring_depth,
             config,
             keybinds,
+            view: View::default(),
             radial_map: None,
             renderer: RadialRenderer::new(ColorConfig::default()),
             hovered_uuid: None,
@@ -241,6 +246,7 @@ impl App {
             Action::ToggleFocus => self.toggle_focus(),
             Action::MoveUp => self.move_hover_up(),
             Action::MoveDown => self.move_hover_down(),
+            Action::ToggleView => self.view = self.view.next(),
         }
     }
 

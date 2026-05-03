@@ -40,6 +40,9 @@ pub enum Action {
     ToggleFocus,
     MoveUp,
     MoveDown,
+    /// Cycle through the available [`crate::views::View`]s — radial,
+    /// tree, etc.
+    ToggleView,
 }
 
 impl Action {
@@ -58,6 +61,7 @@ impl Action {
             Action::ToggleFocus => "toggle_focus",
             Action::MoveUp => "move_up",
             Action::MoveDown => "move_down",
+            Action::ToggleView => "toggle_view",
         }
     }
 
@@ -74,6 +78,7 @@ impl Action {
             "toggle_focus" => Some(Action::ToggleFocus),
             "move_up" => Some(Action::MoveUp),
             "move_down" => Some(Action::MoveDown),
+            "toggle_view" => Some(Action::ToggleView),
             _ => None,
         }
     }
@@ -93,6 +98,7 @@ impl Action {
             Action::ToggleFocus,
             Action::MoveUp,
             Action::MoveDown,
+            Action::ToggleView,
         ]
     }
 }
@@ -237,6 +243,8 @@ impl Keybinds {
         add(KeyCode::Char('k'), KeyModifiers::NONE, Action::MoveUp);
         add(KeyCode::Down, KeyModifiers::NONE, Action::MoveDown);
         add(KeyCode::Char('j'), KeyModifiers::NONE, Action::MoveDown);
+
+        add(KeyCode::Char('v'), KeyModifiers::NONE, Action::ToggleView);
 
         Self { map }
     }

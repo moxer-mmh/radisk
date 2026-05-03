@@ -70,8 +70,11 @@ fn render_viewing(f: &mut Frame, app: &App) {
         .constraints([Constraint::Min(0), Constraint::Length(2)])
         .split(main_chunks[1]);
 
-    // Radial map
-    render_radial_map(f, app, map_chunks[0]);
+    // Main view (radial or tree)
+    match app.view {
+        crate::views::View::Radial => render_radial_map(f, app, map_chunks[0]),
+        crate::views::View::Tree => crate::views::render_tree(f, app, map_chunks[0]),
+    }
 
     // Status bar
     render_status_bar(f, app, map_chunks[1]);
@@ -267,7 +270,7 @@ fn render_status_bar(f: &mut Frame, app: &App, area: Rect) {
     let help_text = if app.hovered_uuid.is_some() {
         "[u/Backspace] Up  [Enter] Open  [d] Delete  [+/-] Zoom  [r] Rescan  [?] Help  [q] Quit"
     } else {
-        "[u/Backspace] Up  [d] Delete  [+/-] Zoom  [r] Rescan  [Tab] Focus  [?] Help  [q] Quit"
+        "[u/Backspace] Up  [d] Delete  [+/-] Zoom  [r] Rescan  [Tab] Focus  [v] View  [?] Help  [q] Quit"
     };
 
     let status_line = Line::from(vec![
@@ -357,6 +360,10 @@ fn render_help(f: &mut Frame, app: &App) {
         Line::from(vec![
             Span::styled("  Tab        ", Style::default().fg(Color::White)),
             Span::raw("Toggle focus (map/sidebar)"),
+        ]),
+        Line::from(vec![
+            Span::styled("  v          ", Style::default().fg(Color::White)),
+            Span::raw("Toggle view (radial / tree)"),
         ]),
         Line::from(vec![
             Span::styled("  j/k        ", Style::default().fg(Color::White)),
