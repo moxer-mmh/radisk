@@ -9,6 +9,7 @@ mod scanner;
 mod scanner_streaming;
 mod tree;
 mod ui;
+mod views;
 
 use anyhow::{bail, Context, Result};
 use app::App;
