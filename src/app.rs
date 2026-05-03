@@ -820,16 +820,36 @@ impl App {
         self.sidebar_hover_index = None;
     }
 
-    /// Sync sidebar hover to canvas
+    /// Sync sidebar hover → radial hover.
+    ///
+    /// When the lookup succeeds (exact match or the "small files" group
+    /// fallback in [`Self::find_segment_uuid_for_sidebar_hover`]), the
+    /// radial highlight tracks the sidebar cursor on every j/k. When
+    /// the lookup truly returns `None` — radial map empty, no segments
+    /// at all — we keep whatever hover was already showing rather than
+    /// flicker it off; otherwise quick keyboard navigation past the
+    /// last visible segment would blank the radial.
     fn sync_hover_to_canvas(&mut self) {
-        let target_uuid = self.find_segment_uuid_for_sidebar_hover();
-        self.hovered_uuid = target_uuid;
-        self.renderer.set_hovered(target_uuid);
+        if let Some(uuid) = self.find_segment_uuid_for_sidebar_hover() {
+            self.hovered_uuid = Some(uuid);
+            self.renderer.set_hovered(Some(uuid));
+        }
     }
 
     /// Resolve the segment UUID corresponding to the currently sidebar-hovered
-    /// item, if any. Returns `None` when state is incomplete (no hover index,
-    /// no arena, no radial map, or no matching segment).
+    /// item, if any.
+    ///
+    /// Behaviour
+    /// - Exact path match wins.
+    /// - When the sidebar item is too small to draw its own slice — the
+    ///   radial layout rolls those into a fake "N small files" segment —
+    ///   we highlight the small-files group instead, so j/k navigation
+    ///   still produces a visible cue rather than silently clearing the
+    ///   radial hover.
+    /// - Returns `None` only when the radial layout is genuinely empty
+    ///   (no map, no segments at all). In that case the caller leaves the
+    ///   prior hover in place rather than clearing — see
+    ///   [`Self::sync_hover_to_canvas`].
     fn find_segment_uuid_for_sidebar_hover(&self) -> Option<Uuid> {
         let hover_idx = self.sidebar_hover_index?;
         let arena = self.arena.as_ref()?;
@@ -840,9 +860,22 @@ impl App {
             TreeItem::Folder(id, _) => arena.folder(*id).file.path.to_string_lossy().into_owned(),
         };
         let map = self.radial_map.as_ref()?;
+
+        // Pass 1: exact path match.
         for ring in &map.rings {
             for segment in &ring.segments {
                 if segment.path == path {
+                    return Some(segment.uuid);
+                }
+            }
+        }
+        // Pass 2: the item rolled into a small-files group. Return the
+        // first ring's fake segment so the user still sees a highlight.
+        // Only the innermost ring carries a fake group for the current
+        // root, so we stop after finding one in any ring.
+        for ring in &map.rings {
+            for segment in &ring.segments {
+                if segment.is_fake {
                     return Some(segment.uuid);
                 }
             }
