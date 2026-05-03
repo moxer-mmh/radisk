@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Performance
+- Initial scan is **9–14× faster** vs. the legacy synchronous walker on
+  representative trees (release-mode benchmarks, single laptop):
+
+  | target           | files   | legacy  | streaming | speedup |
+  | ---------------- | ------- | ------- | --------- | ------- |
+  | `/usr/share`     | 215 039 | 1.951 s |  0.203 s  | 9.63×   |
+  | `/usr/lib`       | 181 730 | 2.510 s |  0.185 s  | 13.54×  |
+  | `~/.cargo`       |  15 166 | 0.338 s |  0.027 s  | 12.31×  |
+
+  Reproduce with `cargo run --release --example bench_scan -- <path>`.
+
 ### Added
 - **Streaming parallel scanner** (`scanner_streaming` module): replaces the
   blocking `std::fs::read_dir` recursion with a [`jwalk`]-based parallel
