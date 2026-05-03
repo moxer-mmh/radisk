@@ -19,14 +19,31 @@ pub fn render(f: &mut Frame, app: &App) {
     }
 }
 
-/// Render scanning mode
+/// Render scanning mode.
+///
+/// Once Phase 21's live arena has produced a partial radial map (Some
+/// children visible), we render the full Viewing layout — sidebar +
+/// radial + status — so the user sees the biggest folders fill in as
+/// the walker discovers them. Until then we show the original
+/// "Scanning..." placeholder so an empty frame doesn't confuse new
+/// users.
+///
+/// The status bar in either branch threads the live file/byte count
+/// from `scan_progress` and the most-recently-touched path so users
+/// always have a "scan is alive" cue even on huge trees.
 fn render_scanning(f: &mut Frame, app: &App) {
+    if app.radial_map.is_some() {
+        // Partial render: same layout as Viewing mode, just with a
+        // status bar that calls out we're still scanning.
+        render_viewing(f, app);
+        return;
+    }
+
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(0), Constraint::Length(3)])
         .split(f.area());
 
-    // Progress message
     let progress_text = if let Some(ref progress) = app.scan_progress {
         format!(
             "Scanning {}...\n{} files ({})",
@@ -44,7 +61,6 @@ fn render_scanning(f: &mut Frame, app: &App) {
         .wrap(Wrap { trim: true });
     f.render_widget(progress, chunks[0]);
 
-    // Status bar
     let status = Paragraph::new("Press ESC or 'q' to quit")
         .block(Block::default().borders(Borders::TOP))
         .style(Style::default().fg(Color::Gray));

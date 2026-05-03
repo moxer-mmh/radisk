@@ -73,7 +73,7 @@ pub struct Folder {
 }
 
 /// Arena allocator for the file tree
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TreeArena {
     files: Vec<File>,
     folders: Vec<Folder>,

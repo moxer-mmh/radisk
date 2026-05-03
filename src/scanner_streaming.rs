@@ -31,6 +31,7 @@ use jwalk::WalkDir;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -66,11 +67,25 @@ pub enum ScanEvent {
     Failed(String),
 }
 
-/// Handle to a running streaming scan. The `rx` is the consumer; the `handle`
-/// is held so the worker thread is joined when the handle is dropped.
+/// Handle to a running streaming scan.
+///
+/// Three pieces of shared state:
+///
+/// - `rx`: events from the worker (Progress / Warning / Complete).
+/// - `live`: an `Arc<Mutex<TreeArena>>` *also held by the walker*.
+///   The walker writes into it directly; the App can `try_lock()`
+///   it at frame time to render a partial radial / sidebar before
+///   the scan finishes. This is what makes huge scans feel
+///   responsive: the user sees folders appear (and big ones grow
+///   first) while the walker is still cataloguing the long tail.
+/// - `handle`: joined on drop so re-scans can't leak a thread.
 pub struct ScanHandle {
     /// Receiver of [`ScanEvent`]s. Drain via `try_recv` from the UI loop.
     pub rx: Receiver<ScanEvent>,
+    /// Live arena being populated by the walker. The App holds the
+    /// same `Arc` and reads it via `try_lock()` to draw partial
+    /// state mid-scan.
+    pub live: Arc<Mutex<TreeArena>>,
     handle: Option<JoinHandle<()>>,
 }
 
@@ -94,15 +109,22 @@ impl Drop for ScanHandle {
 
 /// Spawn a streaming scan rooted at `path`. The walker runs on its own
 /// thread and uses jwalk's default rayon thread-pool for parallel I/O.
+///
+/// The returned [`ScanHandle::live`] is the *same* `Arc<Mutex<TreeArena>>`
+/// the walker writes into — readers should `try_lock()` it (never
+/// `lock()`) to keep mid-scan rendering non-blocking.
 pub fn scan_streaming(path: &Path, config: &ScanConfig) -> ScanHandle {
     let (tx, rx) = mpsc::channel();
     let path = path.to_path_buf();
     let config = config.clone();
+    let live = Arc::new(Mutex::new(TreeArena::new()));
+    let live_for_worker = Arc::clone(&live);
     let handle = thread::spawn(move || {
-        run(&path, &config, &tx);
+        run(&path, &config, &tx, &live_for_worker);
     });
     ScanHandle {
         rx,
+        live,
         handle: Some(handle),
     }
 }
@@ -175,28 +197,59 @@ fn entry_size(path: &Path, apparent: bool) -> u64 {
     std::fs::metadata(path).map(|m| m.len()).unwrap_or(0)
 }
 
-fn run(root_path: &Path, config: &ScanConfig, tx: &Sender<ScanEvent>) {
-    let mut arena = TreeArena::new();
-
-    // Seed the arena with the root folder.
-    let root_name = root_path
-        .file_name()
-        .unwrap_or_else(|| std::ffi::OsStr::new("/"))
-        .to_string_lossy()
-        .into_owned();
-    let root_id = arena.add_folder(Folder {
-        file: File {
-            name: root_name,
-            size: 0,
-            parent: None,
-            path: root_path.to_path_buf(),
-            ..File::default()
-        },
-        children_files: Vec::new(),
-        children_folders: Vec::new(),
-        child_count: 0,
-    });
-    arena.set_root(root_id);
+/// Walker entrypoint, shared-arena variant (Phase 21).
+///
+/// Writes directly into `shared` so the App can `try_lock()` the same
+/// `Arc<Mutex<TreeArena>>` from the render loop and draw a partial
+/// radial / sidebar while the scan is still running. This is what
+/// makes huge scans feel responsive: the user sees the biggest
+/// folders fill in (radial sorts size-desc, so they grow into the
+/// largest slices first) instead of staring at "Scanning..." for a
+/// minute.
+///
+/// Locking discipline
+/// - One lock acquisition per filesystem entry (folder insert, file
+///   insert + ancestor-size walk). The ancestor-walk runs inside the
+///   same lock so the size view is always self-consistent.
+/// - Lock is released between entries so the App's `try_lock` at
+///   render time has a high chance of succeeding without blocking
+///   the walker.
+/// - At ~30ns per uncontended lock and 2M files, the lock overhead
+///   is ~60ms total — invisible against the scan's wall-clock cost.
+///
+/// On completion the shared arena is cloned once into the
+/// `ScanEvent::Complete` payload. The clone is a one-time O(n) cost
+/// and unblocks the App from holding the live `Arc` after it has
+/// taken ownership.
+fn run(
+    root_path: &Path,
+    config: &ScanConfig,
+    tx: &Sender<ScanEvent>,
+    shared: &Arc<Mutex<TreeArena>>,
+) {
+    // Seed the shared arena with the root folder.
+    let root_id = {
+        let root_name = root_path
+            .file_name()
+            .unwrap_or_else(|| std::ffi::OsStr::new("/"))
+            .to_string_lossy()
+            .into_owned();
+        let mut arena = shared.lock().unwrap();
+        let id = arena.add_folder(Folder {
+            file: File {
+                name: root_name,
+                size: 0,
+                parent: None,
+                path: root_path.to_path_buf(),
+                ..File::default()
+            },
+            children_files: Vec::new(),
+            children_folders: Vec::new(),
+            child_count: 0,
+        });
+        arena.set_root(id);
+        id
+    };
 
     let mut path_to_folder: HashMap<PathBuf, FolderId> = HashMap::new();
     path_to_folder.insert(root_path.to_path_buf(), root_id);
@@ -227,9 +280,6 @@ fn run(root_path: &Path, config: &ScanConfig, tx: &Sender<ScanEvent>) {
             }
         };
 
-        // jwalk records per-directory read failures (e.g. permission denied
-        // on a subdirectory) on the DirEntry rather than as an iterator
-        // error, so surface them here.
         if let Some(err) = entry.read_children_error.as_ref() {
             let _ = tx.send(ScanEvent::Warning(format!(
                 "{}: {}",
@@ -238,7 +288,6 @@ fn run(root_path: &Path, config: &ScanConfig, tx: &Sender<ScanEvent>) {
             )));
         }
 
-        // Skip the root entry itself — we already inserted it.
         if entry.depth() == 0 {
             continue;
         }
@@ -248,7 +297,6 @@ fn run(root_path: &Path, config: &ScanConfig, tx: &Sender<ScanEvent>) {
             continue;
         };
         let Some(&parent_id) = path_to_folder.get(parent_path) else {
-            // Parent was filtered (e.g. permission denied); skip orphan.
             continue;
         };
 
@@ -257,13 +305,9 @@ fn run(root_path: &Path, config: &ScanConfig, tx: &Sender<ScanEvent>) {
             continue;
         }
         if !file_type.is_file() && !file_type.is_dir() {
-            // Devices, FIFOs, sockets — ignore as the legacy walker does.
             continue;
         }
 
-        // Honour exclude patterns. Match against the full path *and*
-        // the base name so simple `node_modules` works without the
-        // user having to write a `**/node_modules/**` glob.
         if let Some(set) = exclude_set.as_ref() {
             let base_name = entry.file_name().to_string_lossy();
             if set.is_match(&entry_path) || set.is_match(base_name.as_ref()) {
@@ -274,19 +318,23 @@ fn run(root_path: &Path, config: &ScanConfig, tx: &Sender<ScanEvent>) {
         let name = entry.file_name().to_string_lossy().into_owned();
 
         if file_type.is_dir() {
-            let folder_id = arena.add_folder(Folder {
-                file: File {
-                    name,
-                    size: 0,
-                    parent: Some(parent_id),
-                    path: entry_path.clone(),
-                    ..File::default()
-                },
-                children_files: Vec::new(),
-                children_folders: Vec::new(),
-                child_count: 0,
-            });
-            arena.folder_mut(parent_id).children_folders.push(folder_id);
+            let folder_id = {
+                let mut arena = shared.lock().unwrap();
+                let id = arena.add_folder(Folder {
+                    file: File {
+                        name,
+                        size: 0,
+                        parent: Some(parent_id),
+                        path: entry_path.clone(),
+                        ..File::default()
+                    },
+                    children_files: Vec::new(),
+                    children_folders: Vec::new(),
+                    child_count: 0,
+                });
+                arena.folder_mut(parent_id).children_folders.push(id);
+                id
+            };
             path_to_folder.insert(entry_path, folder_id);
             continue;
         }
@@ -294,10 +342,6 @@ fn run(root_path: &Path, config: &ScanConfig, tx: &Sender<ScanEvent>) {
         // Regular file.
         let size = entry_size(&entry_path, config.use_apparent_size);
 
-        // Hard-link dedup on Unix: count each (dev, ino) once.
-        // We also remember the inode so the delete path can
-        // refuse to act on a path whose identity has changed
-        // between scan and the user's confirmation.
         #[cfg(unix)]
         let inode = {
             use std::os::unix::fs::MetadataExt;
@@ -313,21 +357,27 @@ fn run(root_path: &Path, config: &ScanConfig, tx: &Sender<ScanEvent>) {
         #[cfg(not(unix))]
         let inode: Option<u64> = None;
 
-        let file_id = arena.add_file(File {
-            name,
-            size,
-            parent: Some(parent_id),
-            path: entry_path.clone(),
-            inode,
-        });
-        arena.folder_mut(parent_id).children_files.push(file_id);
+        // One lock for: file insert + parent's children update +
+        // ancestor-size walk. Keeps the partial view self-consistent
+        // — readers never observe a file in `children_files` whose
+        // size hasn't been added to its ancestors.
+        {
+            let mut arena = shared.lock().unwrap();
+            let file_id = arena.add_file(File {
+                name,
+                size,
+                parent: Some(parent_id),
+                path: entry_path.clone(),
+                inode,
+            });
+            arena.folder_mut(parent_id).children_files.push(file_id);
 
-        // Walk up the parent chain, accumulating size into every ancestor.
-        let mut cursor = Some(parent_id);
-        while let Some(id) = cursor {
-            let folder = arena.folder_mut(id);
-            folder.file.size += size;
-            cursor = folder.file.parent;
+            let mut cursor = Some(parent_id);
+            while let Some(id) = cursor {
+                let folder = arena.folder_mut(id);
+                folder.file.size += size;
+                cursor = folder.file.parent;
+            }
         }
 
         files += 1;
@@ -343,14 +393,24 @@ fn run(root_path: &Path, config: &ScanConfig, tx: &Sender<ScanEvent>) {
         }
     }
 
-    // Finalise child_count for every folder. Cheap single pass over a Vec.
-    let folder_count = arena.folders().len();
-    for idx in 0..folder_count {
-        let folder = arena.folder_mut(FolderId(idx));
-        folder.child_count = (folder.children_files.len() + folder.children_folders.len()) as u32;
+    // Finalise child_count for every folder. Single lock over the
+    // whole pass — the scan is over so contention with the App's
+    // render loop no longer matters.
+    {
+        let mut arena = shared.lock().unwrap();
+        let folder_count = arena.folders().len();
+        for idx in 0..folder_count {
+            let folder = arena.folder_mut(FolderId(idx));
+            folder.child_count =
+                (folder.children_files.len() + folder.children_folders.len()) as u32;
+        }
     }
 
-    let _ = tx.send(ScanEvent::Complete(Box::new(arena)));
+    // Hand off ownership via a one-time clone. The App receives this
+    // and drops its reference to the shared `Arc` so post-scan reads
+    // are lock-free.
+    let final_arena = shared.lock().unwrap().clone();
+    let _ = tx.send(ScanEvent::Complete(Box::new(final_arena)));
 }
 
 #[cfg(test)]

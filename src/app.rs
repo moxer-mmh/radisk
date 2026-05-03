@@ -195,6 +195,33 @@ impl App {
         self.scan_handle = Some(scan_streaming(&self.current_path, &scan_config));
     }
 
+    /// Rebuild the radial map from the live (mid-scan) arena via
+    /// `try_lock`. Skips silently if the walker holds the lock — we'll
+    /// retry on the next frame. Used by `update_scan_progress` so the
+    /// radial fills in progressively while jwalk is still running.
+    fn rebuild_map_from_live(&mut self) {
+        let Some(handle) = self.scan_handle.as_ref() else {
+            return;
+        };
+        let Ok(arena) = handle.live.try_lock() else {
+            return;
+        };
+        let Some(root_id) = arena.root() else {
+            return;
+        };
+        let config = RadialConfig {
+            ring_depth: self.ring_depth,
+            terminal_width: self.terminal_size.0,
+            terminal_height: self.terminal_size.1,
+            ..Default::default()
+        };
+        self.radial_map = Some(build_radial_map(&arena, root_id, &config));
+        self.canvas_coords = Some(CanvasCoords::new(
+            self.terminal_size.0 as usize,
+            self.terminal_size.1 as usize,
+        ));
+    }
+
     /// Rebuild the radial map from current state
     pub fn rebuild_map(&mut self) {
         if let Some(ref arena) = self.arena {
@@ -1225,10 +1252,23 @@ impl App {
     /// Get segments for sidebar display, ordered by the user's
     /// currently-selected [`SortMode`]. Shared with the tree view so
     /// both surfaces stay consistent without duplicating the lookup.
+    ///
+    /// During a scan the post-scan `arena` is empty; fall back to a
+    /// non-blocking `try_lock` on the live `Arc<Mutex<TreeArena>>`
+    /// shared with the walker so the sidebar populates progressively.
+    /// A failed `try_lock` returns the empty list — the next frame
+    /// will retry.
     pub fn sidebar_items(&self) -> Vec<crate::tree::TreeItem> {
         if let Some(ref arena) = self.arena {
             if let Some(root_id) = arena.root() {
                 return arena.folder_items_sorted(root_id, self.sort_mode);
+            }
+        }
+        if let Some(handle) = self.scan_handle.as_ref() {
+            if let Ok(arena) = handle.live.try_lock() {
+                if let Some(root_id) = arena.root() {
+                    return arena.folder_items_sorted(root_id, self.sort_mode);
+                }
             }
         }
         Vec::new()
@@ -1257,6 +1297,11 @@ impl App {
                         total_size,
                     });
                     self.scan_current_path = current;
+                    // Refresh the radial from the live (mid-scan)
+                    // arena. `try_lock` keeps us off the hot path of
+                    // the walker thread; if we miss this beat we'll
+                    // pick it up at the next Progress (~80ms).
+                    self.rebuild_map_from_live();
                 }
                 ScanEvent::Warning(msg) => {
                     // Surface the most recent warning in the status bar.
