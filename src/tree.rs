@@ -1,3 +1,4 @@
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 /// Ordering applied when listing a folder's children. Stable across
@@ -37,16 +38,16 @@ impl SortMode {
 }
 
 /// Unique identifier for files in the arena
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct FileId(pub usize);
 
 /// Unique identifier for folders in the arena
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct FolderId(pub usize);
 
 /// A file entry in the tree
 #[allow(dead_code)]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct File {
     pub name: String,
     pub size: u64,
@@ -55,7 +56,7 @@ pub struct File {
 }
 
 /// A folder entry in the tree
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Folder {
     pub file: File,
     pub children_files: Vec<FileId>,
@@ -64,7 +65,7 @@ pub struct Folder {
 }
 
 /// Arena allocator for the file tree
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct TreeArena {
     files: Vec<File>,
     folders: Vec<Folder>,
