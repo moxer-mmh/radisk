@@ -89,7 +89,8 @@ context_menu.rs is a small leaf consumed by app.rs.
 | `tree` | `TreeArena`, `File`, `Folder`, `FolderId`, `FileId` | nothing internal |
 | `radial` | `RadialMap` and segment angles | `tree` |
 | `renderer` | Braille canvas painting + segment lookup | `radial`, `color` |
-| `ui` | ratatui layout, sidebar, help, status, confirm dialog | `app`, `radial`, `renderer`, `color` |
+| `ui` | ratatui layout, sidebar, help, status, confirm dialog, view dispatch | `app`, `radial`, `renderer`, `color`, `views` |
+| `views` | `View` enum (Radial, Tree), tree-view row builder + renderer | `app`, `tree` |
 | `color` | Palette, gradients, HSL/Lab math | nothing internal |
 | `context_menu` | Right-click menu state | nothing internal |
 

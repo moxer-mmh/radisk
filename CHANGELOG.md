@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (Phase 4 — tree view)
+- New **tree view** alt mode: ncdu-style indented list of the focused
+  folder's children with a proportional size bar, percentage of the
+  largest child, and trailing-slash folder marker. Sorted by size
+  descending. Selection cursor is shared with the sidebar so j/k
+  navigates both views consistently.
+- New `Action::ToggleView` (default chord: `v`) cycles the active
+  view. Adding a future split view will not change the keybind —
+  `View::next` simply gains another arm.
+- New `views` module owns the `View` enum and the tree renderer.
+  Pure `build_rows` function builds the row list from an arena +
+  items slice; ratatui rendering is a thin shell over it. Seven new
+  unit tests cover ordering, percent scaling, bar width invariants,
+  folder marker, empty folders, and the size=0 division-by-zero
+  guard.
+- The help screen and the bottom-of-screen hint bar both list `[v] View`.
+- `docs/config.example.toml` documents the new `toggle_view` action
+  for users who want to rebind it.
+
 ### Added (Phase 3 — config & keybinds)
 - **TOML config file** at `$XDG_CONFIG_HOME/radisk/config.toml` (with
   platform fallbacks via the `directories` crate). All keys optional;
