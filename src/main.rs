@@ -12,6 +12,7 @@ mod renderer;
 mod scanner;
 mod scanner_streaming;
 mod snapshot;
+mod theme;
 mod tree;
 mod ui;
 mod views;

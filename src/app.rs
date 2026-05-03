@@ -7,6 +7,7 @@ use crate::radial::{build_radial_map, RadialConfig, RadialMap, Segment};
 use crate::renderer::{CanvasCoords, RadialRenderer};
 use crate::scanner::ScanProgress;
 use crate::scanner_streaming::{scan_streaming, ScanEvent, ScanHandle};
+use crate::theme::Theme;
 use crate::tree::{format_size, FolderId, SortMode, TreeArena, TreeItem};
 use crate::views::View;
 use crossterm::event::{KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKind};
@@ -51,6 +52,9 @@ pub struct App {
     /// Keybind table, derived from `config.keybinds` at construction
     /// time. Looked up once per key event in `handle_viewing_key`.
     pub keybinds: Keybinds,
+    /// Resolved colour palette for UI chrome. Built once from
+    /// `config.colors`; passed by reference to renderers.
+    pub theme: Theme,
     /// Currently active main-area view (radial, tree, …). Toggled by
     /// the `toggle_view` action.
     pub view: View,
@@ -111,6 +115,14 @@ impl App {
             eprintln!("warning: ignoring invalid keybinds config: {:#}", err);
             Keybinds::defaults()
         });
+        let theme = Theme::from_config(&config.colors);
+        // Bubble theme parse warnings into the initial status
+        // message so users see typo'd hex colours at startup.
+        let initial_status = if theme.warnings.is_empty() {
+            String::new()
+        } else {
+            theme.warnings.join("; ")
+        };
         Self {
             mode: AppMode::Scanning,
             focus: Focus::Map,
@@ -119,6 +131,7 @@ impl App {
             ring_depth,
             config,
             keybinds,
+            theme,
             view: View::default(),
             sort_mode: SortMode::default(),
             delete_strategy: DeleteStrategy::detect(),
@@ -134,7 +147,7 @@ impl App {
             scan_handle: None,
             scan_current_path: None,
             nav_history: Vec::new(),
-            status_message: String::new(),
+            status_message: initial_status,
             canvas_coords: None,
             context_menu: ContextMenu::new(),
             delete_path: None,

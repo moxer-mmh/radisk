@@ -95,6 +95,8 @@ fn render_viewing(f: &mut Frame, app: &App) {
 
 /// Render sidebar with file list
 fn render_sidebar(f: &mut Frame, app: &App, area: Rect) {
+    use crate::theme::Role;
+    let theme = &app.theme;
     let items: Vec<ListItem> = app
         .sidebar_items()
         .iter()
@@ -107,9 +109,9 @@ fn render_sidebar(f: &mut Frame, app: &App, area: Rect) {
                         .as_ref()
                         .map(|a| a.file(*id).name.clone())
                         .unwrap_or_else(|| "?".to_string());
-                    let mut style = Style::default().fg(Color::White);
+                    let mut style = Style::default().fg(theme.color(Role::File));
                     if i == app.sidebar_index {
-                        style = style.bg(Color::DarkGray);
+                        style = style.bg(theme.color(Role::SelectionBg));
                     }
                     if app.sidebar_hover_index == Some(i) {
                         style = style.add_modifier(Modifier::UNDERLINED);
@@ -123,10 +125,10 @@ fn render_sidebar(f: &mut Frame, app: &App, area: Rect) {
                         .map(|a| a.folder(*id).file.name.clone())
                         .unwrap_or_else(|| "?".to_string());
                     let mut style = Style::default()
-                        .fg(Color::Cyan)
+                        .fg(theme.color(Role::Folder))
                         .add_modifier(Modifier::BOLD);
                     if i == app.sidebar_index {
-                        style = style.bg(Color::DarkGray);
+                        style = style.bg(theme.color(Role::SelectionBg));
                     }
                     if app.sidebar_hover_index == Some(i) {
                         style = style.add_modifier(Modifier::UNDERLINED);
@@ -145,18 +147,19 @@ fn render_sidebar(f: &mut Frame, app: &App, area: Rect) {
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| "/".to_string());
 
+    let border_color = if app.focus == Focus::Sidebar {
+        theme.color(Role::BorderFocused)
+    } else {
+        theme.color(Role::Border)
+    };
     let sidebar = List::new(items)
         .block(
             Block::default()
                 .borders(Borders::ALL)
                 .title(format!(" {} ", title))
-                .border_style(if app.focus == Focus::Sidebar {
-                    Style::default().fg(Color::Yellow)
-                } else {
-                    Style::default()
-                }),
+                .border_style(Style::default().fg(border_color)),
         )
-        .style(Style::default().fg(Color::White));
+        .style(Style::default().fg(theme.color(Role::Foreground)));
 
     f.render_widget(sidebar, area);
 }
